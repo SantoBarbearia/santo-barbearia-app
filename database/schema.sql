@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS contas_pagar (
   vencimento DATE NOT NULL,
   status VARCHAR(50) DEFAULT 'Aberto',
   conta VARCHAR(50),
+  categoria VARCHAR(100),
+  recorrente BOOLEAN DEFAULT FALSE,
+  "grupoRecorrente" BIGINT,
+  "repeticoesRestantes" INTEGER DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -63,6 +67,8 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   conta VARCHAR(50),
   de VARCHAR(50),
   para VARCHAR(50),
+  categoria VARCHAR(100),
+  "contaPagarId" BIGINT,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
