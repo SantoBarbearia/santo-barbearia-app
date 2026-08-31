@@ -137,6 +137,98 @@ export async function parseXLSXBruto(arrayBuffer) {
   return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
 }
 
+function encontrarLinhaCabecalho(linhas, primeiraColunaEsperada) {
+  for (let i = 0; i < linhas.length; i++) {
+    if (String(linhas[i]?.[0] || '').trim() === primeiraColunaEsperada) return i;
+  }
+  return -1;
+}
+
+// Reconhece formatos conhecidos (Sicredi maquininha, balanço do sistema) pra pular o
+// mapeamento manual de colunas e já aplicar o tratamento certo pra cada um.
+export function detectarFormatoConhecido(linhas) {
+  if (!linhas || linhas.length === 0) return null;
+
+  const primeiraCelula = String(linhas[0]?.[0] || '').replace(/^﻿/, '').trim();
+  const segundaCelula = String(linhas[0]?.[1] || '').trim();
+  if (primeiraCelula === 'Tipo' && segundaCelula === 'Descrição') return 'balanco-sistema';
+
+  for (let i = 0; i < Math.min(linhas.length, 6); i++) {
+    const c0 = String(linhas[i]?.[0] || '');
+    if (c0.includes('Relatório de Pagamentos')) return 'sicredi-pagamentos';
+    if (c0.includes('Relatório de Vendas')) return 'sicredi-vendas';
+  }
+
+  return null;
+}
+
+// Relatório de Pagamentos da maquininha Sicredi: cada linha é uma venda/parcela
+// individual, mas o banco deposita o valor agrupado por dia + bandeira + tipo de
+// liquidação (Débito/Crédito/Antecipação). Agrupamos do mesmo jeito pra bater 1:1
+// com as linhas do extrato.
+export function parseSicrediPagamentos(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data de pagamento');
+  if (idxCabecalho === -1) return [];
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  const grupos = {};
+  dados.forEach((r) => {
+    const dataPagamento = r[0];
+    const tipoPagamento = r[2];
+    const tipoTransacao = r[14];
+    const bandeira = r[15];
+    const valorLiquido = parseValorBR(r[22]) || 0;
+    const categoria = tipoPagamento === 'Antecipação Automática' ? 'Antecipação' : (tipoTransacao === 'Débito' ? 'Débito' : 'Crédito');
+    const chave = `${dataPagamento}|${categoria}|${bandeira}`;
+
+    if (!grupos[chave]) {
+      grupos[chave] = {
+        data: paraDataISO(dataPagamento),
+        descricao: `Maquininha - ${categoria} ${bandeira}`,
+        valor: 0,
+        tipo: 'entrada'
+      };
+    }
+    grupos[chave].valor += valorLiquido;
+  });
+
+  return Object.values(grupos)
+    .map((g) => ({ ...g, id: novoId('maq'), valor: Math.round(g.valor * 100) / 100 }))
+    .filter((g) => g.data && g.valor > 0);
+}
+
+// Exportação do sistema (balanço): mistura recebimentos, pagamentos e linhas de
+// resumo num único CSV. Só os recebimentos "A RECEBER" já pagos via PIX aparecem
+// individualmente no extrato — os pagos no cartão já estão cobertos pela
+// conciliação com a maquininha, e os "Em aberto" ainda não viraram dinheiro.
+export function parseBalancoSistema(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Tipo');
+  const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
+  const registros = [];
+
+  for (let i = inicio; i < linhas.length; i++) {
+    const r = linhas[i];
+    if (String(r[0] || '').trim() !== 'A RECEBER') continue;
+    if (String(r[7] || '').trim() !== 'Pago') continue;
+    if (!/^pix/i.test(String(r[3] || '').trim())) continue;
+
+    const valor = parseValorBR(r[6]);
+    if (!(valor > 0)) continue;
+    const data = paraDataISO(r[5]) || paraDataISO(r[4]);
+    if (!data) continue;
+
+    registros.push({
+      id: novoId('sis'),
+      data,
+      descricao: String(r[1] || 'Recebimento'),
+      valor,
+      tipo: 'entrada'
+    });
+  }
+
+  return registros;
+}
+
 export function normalizarComMapeamento(linhasBrutas, mapeamento) {
   const dados = mapeamento.temCabecalho ? linhasBrutas.slice(1) : linhasBrutas;
   return dados

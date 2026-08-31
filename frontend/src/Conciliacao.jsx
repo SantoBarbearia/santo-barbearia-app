@@ -5,11 +5,19 @@ import {
   parseCSVBruto,
   parseXLSXBruto,
   normalizarComMapeamento,
-  parsePDF
+  parsePDF,
+  detectarFormatoConhecido,
+  parseSicrediPagamentos,
+  parseBalancoSistema
 } from './conciliacao/parsers';
 import { conciliar } from './conciliacao/matching';
 
-const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null };
+const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null };
+
+const NOTAS_FORMATO = {
+  'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
+  'balanco-sistema': 'Balanço do sistema reconhecido: mostrando só os recebimentos via PIX já marcados como pagos (os pagos no cartão já são cobertos pela conciliação com a maquininha).'
+};
 
 const LABELS_FONTE = {
   extrato: 'Extrato Bancário',
@@ -52,18 +60,26 @@ export default function Conciliacao({ contasAPagar }) {
         const texto = await arquivo.text();
         const linhas = parseOFX(texto);
         atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false });
-      } else if (ext === 'csv') {
-        const texto = await arquivo.text();
-        const bruto = await parseCSVBruto(texto);
-        atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
-        setMapeamentoForm({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
-        setMapeando(chave);
-      } else if (ext === 'xlsx' || ext === 'xls') {
-        const buffer = await arquivo.arrayBuffer();
-        const bruto = await parseXLSXBruto(buffer);
-        atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
-        setMapeamentoForm({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
-        setMapeando(chave);
+      } else if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
+        const bruto = ext === 'csv' ? await parseCSVBruto(await arquivo.text()) : await parseXLSXBruto(await arquivo.arrayBuffer());
+        const formato = detectarFormatoConhecido(bruto);
+
+        if (formato === 'sicredi-pagamentos') {
+          const linhas = parseSicrediPagamentos(bruto);
+          atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false, nota: NOTAS_FORMATO[formato] });
+        } else if (formato === 'balanco-sistema') {
+          const linhas = parseBalancoSistema(bruto);
+          atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false, nota: NOTAS_FORMATO[formato] });
+        } else if (formato === 'sicredi-vendas') {
+          atualizarFonte(chave, {
+            carregando: false,
+            erro: 'Este é o relatório de Vendas (valores brutos, antes do desconto da maquininha). Pra conciliar com o banco, envie o relatório de Pagamentos da Sicredi, que já vem com os valores líquidos.'
+          });
+        } else {
+          atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
+          setMapeamentoForm({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
+          setMapeando(chave);
+        }
       } else if (ext === 'pdf') {
         const buffer = await arquivo.arrayBuffer();
         const linhas = await parsePDF(buffer);
@@ -246,6 +262,7 @@ export default function Conciliacao({ contasAPagar }) {
 
         {fonte.linhas.length > 0 && (
           <div>
+            {fonte.nota && <p className="nota-formato">✓ {fonte.nota}</p>}
             <p className="upload-dica">{fonte.arquivo} — {fonte.linhas.length} lançamento(s). Revise e corrija antes de conciliar:</p>
             <div className="tabela-scroll">
               <table className="tabela">

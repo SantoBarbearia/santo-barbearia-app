@@ -362,6 +362,15 @@ body {
   font-size: 12px;
 }
 
+.nota-formato {
+  background: #eaf7e6;
+  color: var(--cor-claro);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
 .comissao-card {
   background: var(--cor-fundo);
   padding: 20px;

@@ -49,6 +49,9 @@ export default function App() {
     valor: 0,
     data: new Date().toISOString().split('T')[0]
   });
+  const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '' });
+  const [periodoInicio, setPeriodoInicio] = useState('');
+  const [periodoFim, setPeriodoFim] = useState('');
 
   // Carregar dados do Supabase
   useEffect(() => {
@@ -118,6 +121,21 @@ export default function App() {
     reserva: 'Reserva/Investimento',
     sicredi: 'Conta Corrente (Sicredi)'
   };
+
+  const dataBRparaISO = (dataBR) => {
+    const [dia, mes, ano] = dataBR.split('/');
+    return `${ano}-${mes}-${dia}`;
+  };
+
+  const dentroDoPeriodo = (dataBR) => {
+    if (!periodoInicio && !periodoFim) return true;
+    const iso = dataBRparaISO(dataBR);
+    if (periodoInicio && iso < periodoInicio) return false;
+    if (periodoFim && iso > periodoFim) return false;
+    return true;
+  };
+
+  const contasAPagarFiltradas = contasAPagar.filter(c => dentroDoPeriodo(c.vencimento));
 
   const handlePagarConta = (id, contaSelecionada) => {
     const conta = contasAPagar.find(c => c.id === id);
@@ -250,6 +268,30 @@ export default function App() {
     salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
+  const handleAjustarSaldo = () => {
+    const valor = parseFloat(ajuste.valor);
+    if (!(valor > 0)) return;
+
+    const delta = ajuste.tipo === 'credito' ? valor : -valor;
+    const novasContas = { ...contas, [ajuste.conta]: contas[ajuste.conta] + delta };
+
+    const novaMovimentacao = {
+      id: Date.now(),
+      data: new Date().toLocaleDateString('pt-BR'),
+      tipo: ajuste.tipo === 'credito' ? 'Crédito Manual' : 'Débito Manual',
+      descricao: ajuste.descricao.trim() || (ajuste.tipo === 'credito' ? 'Crédito manual' : 'Débito manual'),
+      valor,
+      conta: ajuste.conta
+    };
+    const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    setAjuste({ ...ajuste, valor: '', descricao: '' });
+
+    salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
+  };
+
   const handleTransferencia = () => {
     if (transferencia.valor <= 0 || transferencia.de === transferencia.para) return;
 
@@ -346,6 +388,52 @@ export default function App() {
           {activeTab === 'visao-geral' && (
             <div>
               <div className="card">
+                <h3>Adicionar Crédito/Débito em Conta</h3>
+                <div className="form-transferencia">
+                  <div className="input-group">
+                    <label>Conta</label>
+                    <select value={ajuste.conta} onChange={(e) => setAjuste({ ...ajuste, conta: e.target.value })}>
+                      {Object.entries(nomesContas).map(([chave, nome]) => (
+                        <option key={chave} value={chave}>{nome}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="input-group">
+                    <label>Tipo</label>
+                    <select value={ajuste.tipo} onChange={(e) => setAjuste({ ...ajuste, tipo: e.target.value })}>
+                      <option value="credito">Crédito (entrada)</option>
+                      <option value="debito">Débito (saída)</option>
+                    </select>
+                  </div>
+                  <div className="input-group">
+                    <label>Valor</label>
+                    <input
+                      type="number"
+                      value={ajuste.valor}
+                      onChange={(e) => setAjuste({ ...ajuste, valor: e.target.value })}
+                      placeholder="0,00"
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label>Descrição (opcional)</label>
+                    <input
+                      type="text"
+                      value={ajuste.descricao}
+                      onChange={(e) => setAjuste({ ...ajuste, descricao: e.target.value })}
+                      placeholder="Ex: Vendas do dia"
+                    />
+                  </div>
+                  <button
+                    onClick={handleAjustarSaldo}
+                    disabled={!(parseFloat(ajuste.valor) > 0)}
+                    className="btn-transferir"
+                  >
+                    Registrar
+                  </button>
+                </div>
+              </div>
+
+              <div className="card">
                 <h3>Resumo Financeiro</h3>
                 <div className="resumo-grid">
                   <div className="resumo-item">
@@ -422,11 +510,28 @@ export default function App() {
               </div>
 
               <div className="card">
+                <h3>Filtrar por Período (vencimento)</h3>
+                <div className="form-transferencia">
+                  <div className="input-group">
+                    <label>De</label>
+                    <input type="date" value={periodoInicio} onChange={(e) => setPeriodoInicio(e.target.value)} />
+                  </div>
+                  <div className="input-group">
+                    <label>Até</label>
+                    <input type="date" value={periodoFim} onChange={(e) => setPeriodoFim(e.target.value)} />
+                  </div>
+                  <button onClick={() => { setPeriodoInicio(''); setPeriodoFim(''); }} className="btn-cancelar">
+                    Limpar filtro
+                  </button>
+                </div>
+              </div>
+
+              <div className="card">
                 <h3>Contas em Aberto</h3>
-                {contasAPagar.filter(c => c.status === 'Aberto').length === 0 && (
-                  <p>Nenhuma conta em aberto</p>
+                {contasAPagarFiltradas.filter(c => c.status === 'Aberto').length === 0 && (
+                  <p>Nenhuma conta em aberto {(periodoInicio || periodoFim) ? 'nesse período' : ''}</p>
                 )}
-                {contasAPagar.filter(c => c.status === 'Aberto').map(conta => (
+                {contasAPagarFiltradas.filter(c => c.status === 'Aberto').map(conta => (
                   editandoContaId === conta.id ? (
                     <div key={conta.id} className="item-conta item-conta-editando">
                       <div className="form-transferencia">
@@ -492,12 +597,12 @@ export default function App() {
                 ))}
               </div>
 
-              {contasAPagar.filter(c => c.status === 'Pago').length > 0 && (
+              {contasAPagarFiltradas.filter(c => c.status === 'Pago').length > 0 && (
                 <div className="card">
                   <h3>Contas Pagas</h3>
                   <table className="tabela">
                     <tbody>
-                      {contasAPagar.filter(c => c.status === 'Pago').map(conta => (
+                      {contasAPagarFiltradas.filter(c => c.status === 'Pago').map(conta => (
                         <tr key={conta.id}>
                           <td>{conta.descricao}</td>
                           <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
