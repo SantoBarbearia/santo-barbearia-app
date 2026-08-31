@@ -56,7 +56,7 @@ export default function App() {
       setCarregando(true);
       
       // Carregar contas
-      const { data: contasData } = await supabase.from('contas').select('*').single().catch(() => ({ data: null }));
+      const { data: contasData } = await supabase.from('contas').select('*').single();
       if (contasData) setContas(contasData);
       
       // Carregar contas a pagar
@@ -64,7 +64,7 @@ export default function App() {
       if (contasPagarData) setContasAPagar(contasPagarData);
       
       // Carregar comissões
-      const { data: comissoesData } = await supabase.from('comissoes').select('*').single().catch(() => ({ data: null }));
+      const { data: comissoesData } = await supabase.from('comissoes').select('*').single();
       if (comissoesData) setComissoes(comissoesData);
       
       // Carregar movimentações
@@ -411,7 +411,7 @@ export default function App() {
         </div>
 
         <div className="footer">
-          <p>💡 <strong>Dica:</strong> Todos os campos são editáveis. Os dados são salvos automaticamente no Firebase!</p>
+          <p>💡 <strong>Dica:</strong> Todos os campos são editáveis. Os dados são salvos automaticamente no Supabase!</p>
         </div>
       </div>
     </div>
