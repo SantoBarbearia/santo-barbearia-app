@@ -39,6 +39,7 @@ export default function App() {
   });
 
   const [movimentacoes, setMovimentacoes] = useState([]);
+  const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '' });
   const [transferencia, setTransferencia] = useState({
     de: 'caixa',
     para: 'sicredi',
@@ -149,6 +150,28 @@ export default function App() {
       comissoes,
       movimentacoes: novasMovimentacoes
     });
+  };
+
+  const handleAdicionarConta = () => {
+    if (!novaConta.descricao.trim() || !(parseFloat(novaConta.valor) > 0) || !novaConta.vencimento) return;
+
+    const [ano, mes, dia] = novaConta.vencimento.split('-');
+
+    const conta = {
+      id: Date.now(),
+      data: new Date().toLocaleDateString('pt-BR'),
+      descricao: novaConta.descricao.trim(),
+      valor: parseFloat(novaConta.valor),
+      vencimento: `${dia}/${mes}/${ano}`,
+      status: 'Aberto',
+      conta: ''
+    };
+
+    const novasContasAPagar = [...contasAPagar, conta];
+    setContasAPagar(novasContasAPagar);
+    setNovaConta({ descricao: '', valor: '', vencimento: '' });
+
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
 
   const handleTransferencia = () => {
@@ -281,35 +304,76 @@ export default function App() {
           )}
 
           {activeTab === 'contas-pagar' && (
-            <div className="card">
-              <h3>Contas em Aberto</h3>
-              {contasAPagar.filter(c => c.status === 'Aberto').map(conta => (
-                <div key={conta.id} className="item-conta">
-                  <div className="info-conta">
-                    <p className="desc">{conta.descricao}</p>
-                    <p className="venc">Vencimento: {conta.vencimento}</p>
+            <div>
+              <div className="card">
+                <h3>Nova Conta a Pagar</h3>
+                <div className="form-transferencia">
+                  <div className="input-group">
+                    <label>Descrição</label>
+                    <input
+                      type="text"
+                      value={novaConta.descricao}
+                      onChange={(e) => setNovaConta({ ...novaConta, descricao: e.target.value })}
+                      placeholder="Ex: Aluguel"
+                    />
                   </div>
-                  <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                  <div className="acoes">
-                    <select
-                      value={conta.conta}
-                      onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, conta: e.target.value } : c))}
-                    >
-                      <option value="">Selecionar conta</option>
-                      {Object.entries(nomesContas).map(([chave, nome]) => (
-                        <option key={chave} value={chave}>{nome}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => handlePagarConta(conta.id, conta.conta)}
-                      disabled={!conta.conta || contas[conta.conta] < conta.valor}
-                      className="btn-pagar"
-                    >
-                      Pagar
-                    </button>
+                  <div className="input-group">
+                    <label>Valor</label>
+                    <input
+                      type="number"
+                      value={novaConta.valor}
+                      onChange={(e) => setNovaConta({ ...novaConta, valor: e.target.value })}
+                      placeholder="0,00"
+                    />
                   </div>
+                  <div className="input-group">
+                    <label>Vencimento</label>
+                    <input
+                      type="date"
+                      value={novaConta.vencimento}
+                      onChange={(e) => setNovaConta({ ...novaConta, vencimento: e.target.value })}
+                    />
+                  </div>
+                  <button
+                    onClick={handleAdicionarConta}
+                    disabled={!novaConta.descricao.trim() || !(parseFloat(novaConta.valor) > 0) || !novaConta.vencimento}
+                    className="btn-transferir"
+                  >
+                    Adicionar
+                  </button>
                 </div>
-              ))}
+              </div>
+
+              <div className="card">
+                <h3>Contas em Aberto</h3>
+                {contasAPagar.filter(c => c.status === 'Aberto').map(conta => (
+                  <div key={conta.id} className="item-conta">
+                    <div className="info-conta">
+                      <p className="desc">{conta.descricao}</p>
+                      <p className="venc">Vencimento: {conta.vencimento}</p>
+                    </div>
+                    <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                    <div className="acoes">
+                      <select
+                        value={conta.conta}
+                        onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, conta: e.target.value } : c))}
+                      >
+                        <option value="">Selecionar conta</option>
+                        {Object.entries(nomesContas).map(([chave, nome]) => (
+                          <option key={chave} value={chave}>{nome}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handlePagarConta(conta.id, conta.conta)}
+                        disabled={!conta.conta || contas[conta.conta] < conta.valor}
+                        className="btn-pagar"
+                      >
+                        Pagar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
