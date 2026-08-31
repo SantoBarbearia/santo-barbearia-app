@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Conciliacao from './Conciliacao';
+import Dashboard from './Dashboard';
 import './App.css';
 
 // Configuração Supabase
@@ -25,6 +26,34 @@ const CATEGORIAS_CONTABEIS = [
   'Serviços Contábeis/Jurídicos',
   'Outras Despesas'
 ];
+
+const BARBEIROS_CHAVES = ['eduardo', 'gabriel', 'thais', 'thiago'];
+const CAMPOS_COMISSAO = ['servicos', 'produtos', 'assinatura', 'vale', 'consumo', 'mei'];
+
+// A tabela "comissoes" no Supabase guarda uma coluna por barbeiro+campo
+// (eduardo_servicos, eduardo_produtos, ...), mas o estado do app usa um
+// objeto aninhado (comissoes.eduardo.servicos) — essas funções convertem
+// entre os dois formatos na hora de salvar/carregar.
+function achatarComissoes(comissoesAninhadas) {
+  const achatado = {};
+  BARBEIROS_CHAVES.forEach(b => {
+    CAMPOS_COMISSAO.forEach(c => {
+      achatado[`${b}_${c}`] = comissoesAninhadas[b]?.[c] ?? 0;
+    });
+  });
+  return achatado;
+}
+
+function desachatarComissoes(linha) {
+  const aninhado = {};
+  BARBEIROS_CHAVES.forEach(b => {
+    aninhado[b] = {};
+    CAMPOS_COMISSAO.forEach(c => {
+      aninhado[b][c] = parseFloat(linha[`${b}_${c}`]) || 0;
+    });
+  });
+  return aninhado;
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('visao-geral');
@@ -68,6 +97,8 @@ export default function App() {
   const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '', categoria: '' });
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
+  const [fechamentos, setFechamentos] = useState([]);
+  const [notas, setNotas] = useState([]);
 
   // Carregar dados do Supabase
   useEffect(() => {
@@ -88,12 +119,20 @@ export default function App() {
       
       // Carregar comissões
       const { data: comissoesData } = await supabase.from('comissoes').select('*').single();
-      if (comissoesData) setComissoes(comissoesData);
-      
+      if (comissoesData) setComissoes(desachatarComissoes(comissoesData));
+
       // Carregar movimentações
       const { data: movimentacoesData } = await supabase.from('movimentacoes').select('*');
       if (movimentacoesData) setMovimentacoes(movimentacoesData);
-      
+
+      // Carregar fechamentos mensais
+      const { data: fechamentosData } = await supabase.from('fechamentos').select('*');
+      if (fechamentosData) setFechamentos(fechamentosData);
+
+      // Carregar observações do dashboard
+      const { data: notasData } = await supabase.from('notas_dashboard').select('*');
+      if (notasData) setNotas(notasData);
+
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
       alert('Erro ao conectar com Supabase. Verifique suas credenciais!');
@@ -103,25 +142,41 @@ export default function App() {
     }
   };
 
-  // Salvar dados no Supabase
-  const salvarDados = async (dados) => {
+  // Salvar dados no Supabase. Campos omitidos usam o valor atual do estado.
+  const salvarDados = async (dadosParciais = {}) => {
+    const dados = {
+      contas, contasAPagar, comissoes, movimentacoes, fechamentos, notas,
+      ...dadosParciais
+    };
     try {
       // Upsert contas (inserir ou atualizar)
       await supabase.from('contas').upsert([{ id: 1, ...dados.contas }]);
-      
+
       // Delete e reinsert contas a pagar (mais simples que update individual)
       await supabase.from('contas_pagar').delete().neq('id', -1);
       if (dados.contasAPagar.length > 0) {
         await supabase.from('contas_pagar').insert(dados.contasAPagar);
       }
-      
+
       // Upsert comissões
-      await supabase.from('comissoes').upsert([{ id: 1, ...dados.comissoes }]);
-      
+      await supabase.from('comissoes').upsert([{ id: 1, ...achatarComissoes(dados.comissoes) }]);
+
       // Delete e reinsert movimentações
       await supabase.from('movimentacoes').delete().neq('id', -1);
       if (dados.movimentacoes.length > 0) {
         await supabase.from('movimentacoes').insert(dados.movimentacoes);
+      }
+
+      // Delete e reinsert fechamentos mensais
+      await supabase.from('fechamentos').delete().neq('id', -1);
+      if (dados.fechamentos.length > 0) {
+        await supabase.from('fechamentos').insert(dados.fechamentos);
+      }
+
+      // Delete e reinsert observações do dashboard
+      await supabase.from('notas_dashboard').delete().neq('id', -1);
+      if (dados.notas.length > 0) {
+        await supabase.from('notas_dashboard').insert(dados.notas);
       }
     } catch (erro) {
       console.error('Erro ao salvar:', erro);
@@ -361,6 +416,65 @@ export default function App() {
     salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
+  const handleFecharMes = () => {
+    const somar = (campo) => BARBEIROS_CHAVES.reduce((soma, b) => soma + (comissoes[b][campo] || 0), 0);
+    const totalServicos = somar('servicos');
+    const totalProdutos = somar('produtos');
+    const totalAssinatura = somar('assinatura');
+    const totalVale = somar('vale');
+    const totalConsumo = somar('consumo');
+    const totalMei = somar('mei');
+    const comissaoBruta = totalServicos + totalProdutos + totalAssinatura;
+    const comissaoLiquida = comissaoBruta - totalVale - totalConsumo - totalMei;
+
+    const hoje = new Date();
+    const mes = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const mesLabel = `${nomesMeses[hoje.getMonth()]}/${hoje.getFullYear()}`;
+
+    if (!window.confirm(`Fechar ${mesLabel}? Isso salva uma foto das comissões atuais no histórico do Dashboard e zera os campos da aba Comissões pra um novo ciclo (o MEI volta para R$ 86,05).`)) return;
+
+    const novoFechamento = {
+      id: Date.now(),
+      mes,
+      mesLabel,
+      faturamentoServicos: totalServicos,
+      faturamentoProdutos: totalProdutos,
+      faturamentoAssinatura: totalAssinatura,
+      comissaoBruta,
+      totalVale,
+      totalConsumo,
+      totalMei,
+      comissaoLiquida,
+      dataFechamento: hoje.toLocaleDateString('pt-BR')
+    };
+    const novosFechamentos = [...fechamentos, novoFechamento];
+
+    const comissoesZeradas = {};
+    BARBEIROS_CHAVES.forEach(b => {
+      comissoesZeradas[b] = { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 };
+    });
+
+    setFechamentos(novosFechamentos);
+    setComissoes(comissoesZeradas);
+
+    salvarDados({ comissoes: comissoesZeradas, fechamentos: novosFechamentos });
+  };
+
+  const handleAdicionarNota = (texto) => {
+    if (!texto.trim()) return;
+    const novaNota = { id: Date.now(), data: new Date().toLocaleDateString('pt-BR'), texto: texto.trim() };
+    const novasNotas = [...notas, novaNota];
+    setNotas(novasNotas);
+    salvarDados({ notas: novasNotas });
+  };
+
+  const handleExcluirNota = (id) => {
+    const novasNotas = notas.filter(n => n.id !== id);
+    setNotas(novasNotas);
+    salvarDados({ notas: novasNotas });
+  };
+
   const handleTransferencia = () => {
     if (transferencia.valor <= 0 || transferencia.de === transferencia.para) return;
 
@@ -441,7 +555,8 @@ export default function App() {
             { id: 'contas-pagar', label: 'Contas a Pagar' },
             { id: 'comissoes', label: 'Comissões' },
             { id: 'transferencias', label: 'Transferências' },
-            { id: 'conciliacao', label: 'Conciliação' }
+            { id: 'conciliacao', label: 'Conciliação' },
+            { id: 'dashboard', label: 'Dashboard' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -856,6 +971,19 @@ export default function App() {
 
           {activeTab === 'conciliacao' && (
             <Conciliacao contasAPagar={contasAPagar} />
+          )}
+
+          {activeTab === 'dashboard' && (
+            <Dashboard
+              comissoes={comissoes}
+              barbeiros={barbeiros}
+              contasAPagar={contasAPagar}
+              fechamentos={fechamentos}
+              notas={notas}
+              onFecharMes={handleFecharMes}
+              onAdicionarNota={handleAdicionarNota}
+              onExcluirNota={handleExcluirNota}
+            />
           )}
         </div>
 
