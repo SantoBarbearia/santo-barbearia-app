@@ -10,6 +10,22 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 // Inicializar Supabase
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const CATEGORIAS_CONTABEIS = [
+  'Receita de Serviços',
+  'Receita de Produtos',
+  'Outras Receitas',
+  'Aluguel e Ocupação',
+  'Água, Luz e Internet',
+  'Salários e Comissões',
+  'Impostos e Taxas',
+  'Fornecedores e Produtos',
+  'Assinaturas e Sistemas',
+  'Marketing e Publicidade',
+  'Manutenção e Reparos',
+  'Serviços Contábeis/Jurídicos',
+  'Outras Despesas'
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('visao-geral');
   const [loading, setLoading] = useState(true);
@@ -23,13 +39,13 @@ export default function App() {
   });
 
   const [contasAPagar, setContasAPagar] = useState([
-    { id: 1, data: '01/08/2026', descricao: 'Aluguel + IPTU', valor: 4414.05, vencimento: '13/08/2026', status: 'Aberto', conta: '' },
-    { id: 2, data: '01/08/2026', descricao: 'Luz (Cemig)', valor: 131.65, vencimento: '11/08/2026', status: 'Aberto', conta: '' },
-    { id: 3, data: '01/08/2026', descricao: 'Água (Copasa)', valor: 191.15, vencimento: '07/08/2026', status: 'Aberto', conta: '' },
-    { id: 4, data: '01/08/2026', descricao: 'Telefone/Internet (Algar)', valor: 99.90, vencimento: '15/08/2026', status: 'Aberto', conta: '' },
-    { id: 5, data: '01/08/2026', descricao: 'Spotify', valor: 40.90, vencimento: '01/08/2026', status: 'Aberto', conta: '' },
-    { id: 6, data: '01/08/2026', descricao: 'Verisure (Alarme)', valor: 277.53, vencimento: '05/08/2026', status: 'Aberto', conta: '' },
-    { id: 7, data: '01/08/2026', descricao: 'Honorários Contábeis', valor: 400.00, vencimento: '20/08/2026', status: 'Aberto', conta: '' }
+    { id: 1, data: '01/08/2026', descricao: 'Aluguel + IPTU', valor: 4414.05, vencimento: '13/08/2026', status: 'Aberto', conta: '', categoria: 'Aluguel e Ocupação', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 2, data: '01/08/2026', descricao: 'Luz (Cemig)', valor: 131.65, vencimento: '11/08/2026', status: 'Aberto', conta: '', categoria: 'Água, Luz e Internet', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 3, data: '01/08/2026', descricao: 'Água (Copasa)', valor: 191.15, vencimento: '07/08/2026', status: 'Aberto', conta: '', categoria: 'Água, Luz e Internet', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 4, data: '01/08/2026', descricao: 'Telefone/Internet (Algar)', valor: 99.90, vencimento: '15/08/2026', status: 'Aberto', conta: '', categoria: 'Água, Luz e Internet', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 5, data: '01/08/2026', descricao: 'Spotify', valor: 40.90, vencimento: '01/08/2026', status: 'Aberto', conta: '', categoria: 'Assinaturas e Sistemas', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 6, data: '01/08/2026', descricao: 'Verisure (Alarme)', valor: 277.53, vencimento: '05/08/2026', status: 'Aberto', conta: '', categoria: 'Outras Despesas', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 },
+    { id: 7, data: '01/08/2026', descricao: 'Honorários Contábeis', valor: 400.00, vencimento: '20/08/2026', status: 'Aberto', conta: '', categoria: 'Serviços Contábeis/Jurídicos', recorrente: false, grupoRecorrente: null, repeticoesRestantes: 0 }
   ]);
 
   const [comissoes, setComissoes] = useState({
@@ -40,16 +56,16 @@ export default function App() {
   });
 
   const [movimentacoes, setMovimentacoes] = useState([]);
-  const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '' });
+  const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
   const [editandoContaId, setEditandoContaId] = useState(null);
-  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '' });
+  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
   const [transferencia, setTransferencia] = useState({
     de: 'caixa',
     para: 'sicredi',
     valor: 0,
     data: new Date().toISOString().split('T')[0]
   });
-  const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '' });
+  const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '', categoria: '' });
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
 
@@ -137,6 +153,12 @@ export default function App() {
 
   const contasAPagarFiltradas = contasAPagar.filter(c => dentroDoPeriodo(c.vencimento));
 
+  const proximoVencimento = (dataBR) => {
+    const [dia, mes, ano] = dataBR.split('/').map(Number);
+    const d = new Date(ano, mes - 1 + 1, dia);
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  };
+
   const handlePagarConta = (id, contaSelecionada) => {
     const conta = contasAPagar.find(c => c.id === id);
     if (!conta || !contaSelecionada) return;
@@ -146,21 +168,49 @@ export default function App() {
       [contaSelecionada]: contas[contaSelecionada] - conta.valor
     };
 
-    const novasContasAPagar = contasAPagar.map(c =>
+    const agora = Date.now();
+
+    let novasContasAPagar = contasAPagar.map(c =>
       c.id === id ? { ...c, status: 'Pago', conta: contaSelecionada } : c
     );
+
+    if (conta.recorrente && conta.repeticoesRestantes > 0) {
+      const outrasPagas = contasAPagar.filter(c =>
+        c.grupoRecorrente === conta.grupoRecorrente && c.status === 'Pago' && c.id !== conta.id
+      );
+      const consideradas = [conta, ...outrasPagas]
+        .sort((a, b) => new Date(dataBRparaISO(b.vencimento)) - new Date(dataBRparaISO(a.vencimento)))
+        .slice(0, 3);
+      const mediaValor = Math.round((consideradas.reduce((soma, c) => soma + c.valor, 0) / consideradas.length) * 100) / 100;
+
+      const proximaConta = {
+        id: agora,
+        data: new Date().toLocaleDateString('pt-BR'),
+        descricao: conta.descricao,
+        valor: mediaValor,
+        vencimento: proximoVencimento(conta.vencimento),
+        status: 'Aberto',
+        conta: '',
+        categoria: conta.categoria,
+        recorrente: true,
+        grupoRecorrente: conta.grupoRecorrente,
+        repeticoesRestantes: conta.repeticoesRestantes - 1
+      };
+      novasContasAPagar = [...novasContasAPagar, proximaConta];
+    }
 
     setContas(novasContas);
     setContasAPagar(novasContasAPagar);
 
     const novaMovimentacao = {
-      id: Date.now(),
+      id: agora + 1,
       data: new Date().toISOString().split('T')[0],
       tipo: 'Despesa Paga',
       descricao: conta.descricao,
       valor: conta.valor,
       conta: contaSelecionada,
-      contaPagarId: id
+      contaPagarId: id,
+      categoria: conta.categoria
     };
 
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
@@ -178,20 +228,26 @@ export default function App() {
     if (!novaConta.descricao.trim() || !(parseFloat(novaConta.valor) > 0) || !novaConta.vencimento) return;
 
     const [ano, mes, dia] = novaConta.vencimento.split('-');
+    const id = Date.now();
+    const recorrente = !!novaConta.recorrente;
 
     const conta = {
-      id: Date.now(),
+      id,
       data: new Date().toLocaleDateString('pt-BR'),
       descricao: novaConta.descricao.trim(),
       valor: parseFloat(novaConta.valor),
       vencimento: `${dia}/${mes}/${ano}`,
       status: 'Aberto',
-      conta: ''
+      conta: '',
+      categoria: novaConta.categoria,
+      recorrente,
+      grupoRecorrente: recorrente ? id : null,
+      repeticoesRestantes: recorrente ? (parseInt(novaConta.repeticoes, 10) || 0) : 0
     };
 
     const novasContasAPagar = [...contasAPagar, conta];
     setContasAPagar(novasContasAPagar);
-    setNovaConta({ descricao: '', valor: '', vencimento: '' });
+    setNovaConta({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
 
     salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
@@ -199,28 +255,40 @@ export default function App() {
   const handleIniciarEdicaoConta = (conta) => {
     const [dia, mes, ano] = conta.vencimento.split('/');
     setEditandoContaId(conta.id);
-    setContaEditando({ descricao: conta.descricao, valor: conta.valor, vencimento: `${ano}-${mes}-${dia}` });
+    setContaEditando({
+      descricao: conta.descricao,
+      valor: conta.valor,
+      vencimento: `${ano}-${mes}-${dia}`,
+      categoria: conta.categoria || '',
+      recorrente: !!conta.recorrente,
+      repeticoes: conta.repeticoesRestantes || ''
+    });
   };
 
   const handleCancelarEdicaoConta = () => {
     setEditandoContaId(null);
-    setContaEditando({ descricao: '', valor: '', vencimento: '' });
+    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
   };
 
   const handleSalvarEdicaoConta = (id) => {
     if (!contaEditando.descricao.trim() || !(parseFloat(contaEditando.valor) > 0) || !contaEditando.vencimento) return;
 
     const [ano, mes, dia] = contaEditando.vencimento.split('-');
+    const recorrente = !!contaEditando.recorrente;
     const novasContasAPagar = contasAPagar.map(c => c.id === id ? {
       ...c,
       descricao: contaEditando.descricao.trim(),
       valor: parseFloat(contaEditando.valor),
-      vencimento: `${dia}/${mes}/${ano}`
+      vencimento: `${dia}/${mes}/${ano}`,
+      categoria: contaEditando.categoria,
+      recorrente,
+      grupoRecorrente: recorrente ? (c.grupoRecorrente || c.id) : c.grupoRecorrente,
+      repeticoesRestantes: recorrente ? (parseInt(contaEditando.repeticoes, 10) || 0) : 0
     } : c);
 
     setContasAPagar(novasContasAPagar);
     setEditandoContaId(null);
-    setContaEditando({ descricao: '', valor: '', vencimento: '' });
+    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
 
     salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
@@ -281,7 +349,8 @@ export default function App() {
       tipo: ajuste.tipo === 'credito' ? 'Crédito Manual' : 'Débito Manual',
       descricao: ajuste.descricao.trim() || (ajuste.tipo === 'credito' ? 'Crédito manual' : 'Débito manual'),
       valor,
-      conta: ajuste.conta
+      conta: ajuste.conta,
+      categoria: ajuste.categoria
     };
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
 
@@ -423,6 +492,15 @@ export default function App() {
                       placeholder="Ex: Vendas do dia"
                     />
                   </div>
+                  <div className="input-group">
+                    <label>Classificação Contábil</label>
+                    <select value={ajuste.categoria} onChange={(e) => setAjuste({ ...ajuste, categoria: e.target.value })}>
+                      <option value="">Selecionar...</option>
+                      {CATEGORIAS_CONTABEIS.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
                   <button
                     onClick={handleAjustarSaldo}
                     disabled={!(parseFloat(ajuste.valor) > 0)}
@@ -457,7 +535,7 @@ export default function App() {
                       {movimentacoes.slice(-5).reverse().map((mov) => (
                         <tr key={mov.id}>
                           <td>{mov.data}</td>
-                          <td>{mov.descricao}</td>
+                          <td>{mov.descricao}{mov.categoria && <span className="badge-categoria"> {mov.categoria}</span>}</td>
                           <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         </tr>
                       ))}
@@ -498,6 +576,33 @@ export default function App() {
                       value={novaConta.vencimento}
                       onChange={(e) => setNovaConta({ ...novaConta, vencimento: e.target.value })}
                     />
+                  </div>
+                  <div className="input-group">
+                    <label>Classificação Contábil</label>
+                    <select value={novaConta.categoria} onChange={(e) => setNovaConta({ ...novaConta, categoria: e.target.value })}>
+                      <option value="">Selecionar...</option>
+                      {CATEGORIAS_CONTABEIS.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="input-group">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={novaConta.recorrente}
+                        onChange={(e) => setNovaConta({ ...novaConta, recorrente: e.target.checked })}
+                      /> Conta recorrente
+                    </label>
+                    {novaConta.recorrente && (
+                      <input
+                        type="number"
+                        min="1"
+                        value={novaConta.repeticoes}
+                        onChange={(e) => setNovaConta({ ...novaConta, repeticoes: e.target.value })}
+                        placeholder="Repetir mais quantas vezes"
+                      />
+                    )}
                   </div>
                   <button
                     onClick={handleAdicionarConta}
@@ -559,6 +664,33 @@ export default function App() {
                             onChange={(e) => setContaEditando({ ...contaEditando, vencimento: e.target.value })}
                           />
                         </div>
+                        <div className="input-group">
+                          <label>Classificação Contábil</label>
+                          <select value={contaEditando.categoria} onChange={(e) => setContaEditando({ ...contaEditando, categoria: e.target.value })}>
+                            <option value="">Selecionar...</option>
+                            {CATEGORIAS_CONTABEIS.map(cat => (
+                              <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="input-group">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={contaEditando.recorrente}
+                              onChange={(e) => setContaEditando({ ...contaEditando, recorrente: e.target.checked })}
+                            /> Conta recorrente
+                          </label>
+                          {contaEditando.recorrente && (
+                            <input
+                              type="number"
+                              min="1"
+                              value={contaEditando.repeticoes}
+                              onChange={(e) => setContaEditando({ ...contaEditando, repeticoes: e.target.value })}
+                              placeholder="Repetições restantes"
+                            />
+                          )}
+                        </div>
                       </div>
                       <div className="acoes">
                         <button onClick={() => handleSalvarEdicaoConta(conta.id)} className="btn-salvar">Salvar</button>
@@ -568,8 +700,12 @@ export default function App() {
                   ) : (
                     <div key={conta.id} className="item-conta">
                       <div className="info-conta">
-                        <p className="desc">{conta.descricao}</p>
+                        <p className="desc">
+                          {conta.descricao}
+                          {conta.recorrente && <span className="badge-recorrente"> 🔁 {conta.repeticoesRestantes}x restantes</span>}
+                        </p>
                         <p className="venc">Vencimento: {conta.vencimento}</p>
+                        {conta.categoria && <p className="badge-categoria">{conta.categoria}</p>}
                       </div>
                       <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                       <div className="acoes">
@@ -604,7 +740,7 @@ export default function App() {
                     <tbody>
                       {contasAPagarFiltradas.filter(c => c.status === 'Pago').map(conta => (
                         <tr key={conta.id}>
-                          <td>{conta.descricao}</td>
+                          <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
                           <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td>Pago com: {nomesContas[conta.conta] || '—'}</td>
                           <td>
