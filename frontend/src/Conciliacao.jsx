@@ -8,7 +8,8 @@ import {
   parsePDF,
   detectarFormatoConhecido,
   parseSicrediPagamentos,
-  parseBalancoSistema
+  parseBalancoSistema,
+  lerTextoArquivo
 } from './conciliacao/parsers';
 import { conciliar } from './conciliacao/matching';
 
@@ -50,6 +51,17 @@ export default function Conciliacao({ contasAPagar }) {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
   };
 
+  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota) => {
+    if (linhas.length === 0) {
+      atualizarFonte(chave, {
+        carregando: false,
+        erro: `O arquivo "${nomeArquivo}" foi lido, mas não encontramos nenhum lançamento nele. Confira se é o arquivo certo e se o período selecionado não veio vazio.`
+      });
+    } else {
+      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null });
+    }
+  };
+
   const handleArquivo = async (chave, arquivo) => {
     if (!arquivo) return;
     const ext = arquivo.name.split('.').pop().toLowerCase();
@@ -57,19 +69,19 @@ export default function Conciliacao({ contasAPagar }) {
 
     try {
       if (ext === 'ofx') {
-        const texto = await arquivo.text();
+        const texto = await lerTextoArquivo(arquivo);
         const linhas = parseOFX(texto);
-        atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false });
+        finalizarComLinhas(chave, linhas, arquivo.name);
       } else if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
-        const bruto = ext === 'csv' ? await parseCSVBruto(await arquivo.text()) : await parseXLSXBruto(await arquivo.arrayBuffer());
+        const bruto = ext === 'csv' ? await parseCSVBruto(await lerTextoArquivo(arquivo)) : await parseXLSXBruto(await arquivo.arrayBuffer());
         const formato = detectarFormatoConhecido(bruto);
 
         if (formato === 'sicredi-pagamentos') {
           const linhas = parseSicrediPagamentos(bruto);
-          atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false, nota: NOTAS_FORMATO[formato] });
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else if (formato === 'balanco-sistema') {
           const linhas = parseBalancoSistema(bruto);
-          atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false, nota: NOTAS_FORMATO[formato] });
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else if (formato === 'sicredi-vendas') {
           atualizarFonte(chave, {
             carregando: false,
@@ -83,11 +95,11 @@ export default function Conciliacao({ contasAPagar }) {
       } else if (ext === 'pdf') {
         const buffer = await arquivo.arrayBuffer();
         const linhas = await parsePDF(buffer);
-        atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false });
+        finalizarComLinhas(chave, linhas, arquivo.name);
       } else if (['txt', 'ret', 'rem'].includes(ext)) {
-        const texto = await arquivo.text();
+        const texto = await lerTextoArquivo(arquivo);
         const linhas = parseCNAB240(texto);
-        atualizarFonte(chave, { linhas, arquivo: arquivo.name, carregando: false });
+        finalizarComLinhas(chave, linhas, arquivo.name);
       } else {
         atualizarFonte(chave, { carregando: false, erro: 'Formato não suportado. Use OFX, CSV, Excel, PDF ou CNAB240 (.txt/.ret).' });
       }

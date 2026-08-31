@@ -1,3 +1,16 @@
+// Exports de bancos e maquininhas brasileiras costumam vir em Windows-1252/Latin1,
+// não UTF-8 — arquivo.text() sempre assume UTF-8 e transforma todo acento em "�".
+// Lê como UTF-8 primeiro; se aparecer o caractere de substituição (sinal de bytes
+// inválidos pra UTF-8), lê de novo como Windows-1252.
+export async function lerTextoArquivo(arquivo) {
+  const buffer = await arquivo.arrayBuffer();
+  const textoUtf8 = new TextDecoder('utf-8').decode(buffer);
+  if (textoUtf8.includes('�')) {
+    return new TextDecoder('windows-1252').decode(buffer);
+  }
+  return textoUtf8;
+}
+
 // Converte "R$ 1.234,56", "-131,65", "1234.56" etc. em número
 export function parseValorBR(valor) {
   if (typeof valor === 'number') return valor;
@@ -153,11 +166,15 @@ export function detectarFormatoConhecido(linhas) {
   const segundaCelula = String(linhas[0]?.[1] || '').trim();
   if (primeiraCelula === 'Tipo' && segundaCelula === 'Descrição') return 'balanco-sistema';
 
+  // Exportação em XLSX vem com linhas de título ("Relatório de Pagamentos.", período,
+  // etc.) antes do cabeçalho; a exportação em CSV às vezes começa direto no cabeçalho.
   for (let i = 0; i < Math.min(linhas.length, 6); i++) {
     const c0 = String(linhas[i]?.[0] || '');
     if (c0.includes('Relatório de Pagamentos')) return 'sicredi-pagamentos';
     if (c0.includes('Relatório de Vendas')) return 'sicredi-vendas';
   }
+  if (primeiraCelula === 'Data de pagamento' && segundaCelula === 'Código de pagamento') return 'sicredi-pagamentos';
+  if (primeiraCelula === 'Data da venda' && segundaCelula === 'Hora da venda') return 'sicredi-vendas';
 
   return null;
 }
