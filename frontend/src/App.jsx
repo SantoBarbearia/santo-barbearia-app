@@ -40,6 +40,8 @@ export default function App() {
 
   const [movimentacoes, setMovimentacoes] = useState([]);
   const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '' });
+  const [editandoContaId, setEditandoContaId] = useState(null);
+  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '' });
   const [transferencia, setTransferencia] = useState({
     de: 'caixa',
     para: 'sicredi',
@@ -138,7 +140,8 @@ export default function App() {
       tipo: 'Despesa Paga',
       descricao: conta.descricao,
       valor: conta.valor,
-      conta: contaSelecionada
+      conta: contaSelecionada,
+      contaPagarId: id
     };
 
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
@@ -172,6 +175,78 @@ export default function App() {
     setNovaConta({ descricao: '', valor: '', vencimento: '' });
 
     salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+  };
+
+  const handleIniciarEdicaoConta = (conta) => {
+    const [dia, mes, ano] = conta.vencimento.split('/');
+    setEditandoContaId(conta.id);
+    setContaEditando({ descricao: conta.descricao, valor: conta.valor, vencimento: `${ano}-${mes}-${dia}` });
+  };
+
+  const handleCancelarEdicaoConta = () => {
+    setEditandoContaId(null);
+    setContaEditando({ descricao: '', valor: '', vencimento: '' });
+  };
+
+  const handleSalvarEdicaoConta = (id) => {
+    if (!contaEditando.descricao.trim() || !(parseFloat(contaEditando.valor) > 0) || !contaEditando.vencimento) return;
+
+    const [ano, mes, dia] = contaEditando.vencimento.split('-');
+    const novasContasAPagar = contasAPagar.map(c => c.id === id ? {
+      ...c,
+      descricao: contaEditando.descricao.trim(),
+      valor: parseFloat(contaEditando.valor),
+      vencimento: `${dia}/${mes}/${ano}`
+    } : c);
+
+    setContasAPagar(novasContasAPagar);
+    setEditandoContaId(null);
+    setContaEditando({ descricao: '', valor: '', vencimento: '' });
+
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+  };
+
+  const handleExcluirConta = (id) => {
+    const conta = contasAPagar.find(c => c.id === id);
+    if (!conta || !window.confirm(`Excluir "${conta.descricao}"? Essa ação não pode ser desfeita.`)) return;
+
+    const novasContasAPagar = contasAPagar.filter(c => c.id !== id);
+    setContasAPagar(novasContasAPagar);
+
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+  };
+
+  const handleDesfazerPagamento = (id) => {
+    const conta = contasAPagar.find(c => c.id === id);
+    if (!conta || conta.status !== 'Pago') return;
+    if (!window.confirm(`Desfazer o pagamento de "${conta.descricao}"? O valor volta para ${nomesContas[conta.conta]} e a conta volta para "Aberto".`)) return;
+
+    const novasContas = { ...contas, [conta.conta]: contas[conta.conta] + conta.valor };
+    const novasContasAPagar = contasAPagar.map(c => c.id === id ? { ...c, status: 'Aberto', conta: '' } : c);
+    const novasMovimentacoes = movimentacoes.filter(m => !(m.tipo === 'Despesa Paga' && m.contaPagarId === id));
+
+    setContas(novasContas);
+    setContasAPagar(novasContasAPagar);
+    setMovimentacoes(novasMovimentacoes);
+
+    salvarDados({ contas: novasContas, contasAPagar: novasContasAPagar, comissoes, movimentacoes: novasMovimentacoes });
+  };
+
+  const handleExcluirTransferencia = (movId) => {
+    const mov = movimentacoes.find(m => m.id === movId);
+    if (!mov || !window.confirm('Excluir esta transferência? Os saldos das contas envolvidas serão revertidos.')) return;
+
+    const novasContas = {
+      ...contas,
+      [mov.de]: contas[mov.de] + mov.valor,
+      [mov.para]: contas[mov.para] - mov.valor
+    };
+    const novasMovimentacoes = movimentacoes.filter(m => m.id !== movId);
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+
+    salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
   const handleTransferencia = () => {
@@ -346,34 +421,94 @@ export default function App() {
 
               <div className="card">
                 <h3>Contas em Aberto</h3>
+                {contasAPagar.filter(c => c.status === 'Aberto').length === 0 && (
+                  <p>Nenhuma conta em aberto</p>
+                )}
                 {contasAPagar.filter(c => c.status === 'Aberto').map(conta => (
-                  <div key={conta.id} className="item-conta">
-                    <div className="info-conta">
-                      <p className="desc">{conta.descricao}</p>
-                      <p className="venc">Vencimento: {conta.vencimento}</p>
+                  editandoContaId === conta.id ? (
+                    <div key={conta.id} className="item-conta item-conta-editando">
+                      <div className="form-transferencia">
+                        <div className="input-group">
+                          <label>Descrição</label>
+                          <input
+                            type="text"
+                            value={contaEditando.descricao}
+                            onChange={(e) => setContaEditando({ ...contaEditando, descricao: e.target.value })}
+                          />
+                        </div>
+                        <div className="input-group">
+                          <label>Valor</label>
+                          <input
+                            type="number"
+                            value={contaEditando.valor}
+                            onChange={(e) => setContaEditando({ ...contaEditando, valor: e.target.value })}
+                          />
+                        </div>
+                        <div className="input-group">
+                          <label>Vencimento</label>
+                          <input
+                            type="date"
+                            value={contaEditando.vencimento}
+                            onChange={(e) => setContaEditando({ ...contaEditando, vencimento: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      <div className="acoes">
+                        <button onClick={() => handleSalvarEdicaoConta(conta.id)} className="btn-salvar">Salvar</button>
+                        <button onClick={handleCancelarEdicaoConta} className="btn-cancelar">Cancelar</button>
+                      </div>
                     </div>
-                    <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                    <div className="acoes">
-                      <select
-                        value={conta.conta}
-                        onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, conta: e.target.value } : c))}
-                      >
-                        <option value="">Selecionar conta</option>
-                        {Object.entries(nomesContas).map(([chave, nome]) => (
-                          <option key={chave} value={chave}>{nome}</option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => handlePagarConta(conta.id, conta.conta)}
-                        disabled={!conta.conta || contas[conta.conta] < conta.valor}
-                        className="btn-pagar"
-                      >
-                        Pagar
-                      </button>
+                  ) : (
+                    <div key={conta.id} className="item-conta">
+                      <div className="info-conta">
+                        <p className="desc">{conta.descricao}</p>
+                        <p className="venc">Vencimento: {conta.vencimento}</p>
+                      </div>
+                      <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      <div className="acoes">
+                        <select
+                          value={conta.conta}
+                          onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, conta: e.target.value } : c))}
+                        >
+                          <option value="">Selecionar conta</option>
+                          {Object.entries(nomesContas).map(([chave, nome]) => (
+                            <option key={chave} value={chave}>{nome}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handlePagarConta(conta.id, conta.conta)}
+                          disabled={!conta.conta || contas[conta.conta] < conta.valor}
+                          className="btn-pagar"
+                        >
+                          Pagar
+                        </button>
+                        <button onClick={() => handleIniciarEdicaoConta(conta)} className="btn-editar">Editar</button>
+                        <button onClick={() => handleExcluirConta(conta.id)} className="btn-excluir">Excluir</button>
+                      </div>
                     </div>
-                  </div>
+                  )
                 ))}
               </div>
+
+              {contasAPagar.filter(c => c.status === 'Pago').length > 0 && (
+                <div className="card">
+                  <h3>Contas Pagas</h3>
+                  <table className="tabela">
+                    <tbody>
+                      {contasAPagar.filter(c => c.status === 'Pago').map(conta => (
+                        <tr key={conta.id}>
+                          <td>{conta.descricao}</td>
+                          <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td>Pago com: {nomesContas[conta.conta] || '—'}</td>
+                          <td>
+                            <button onClick={() => handleDesfazerPagamento(conta.id)} className="btn-excluir">Desfazer</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -464,6 +599,9 @@ export default function App() {
                           <td>{mov.data}</td>
                           <td>{nomesContas[mov.de]} → {nomesContas[mov.para]}</td>
                           <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td>
+                            <button onClick={() => handleExcluirTransferencia(mov.id)} className="btn-excluir">Excluir</button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

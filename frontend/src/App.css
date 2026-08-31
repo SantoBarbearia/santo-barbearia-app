@@ -247,6 +247,73 @@ body {
   cursor: not-allowed;
 }
 
+.btn-editar {
+  padding: 6px 15px;
+  background: white;
+  color: var(--cor-principal);
+  border: 1px solid var(--cor-principal);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-editar:hover {
+  background: var(--cor-fundo);
+}
+
+.btn-excluir {
+  padding: 6px 15px;
+  background: #c0392b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-excluir:hover {
+  background: #a93226;
+}
+
+.btn-salvar {
+  padding: 10px 20px;
+  background: var(--cor-principal);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-salvar:hover {
+  background: var(--cor-claro);
+}
+
+.btn-cancelar {
+  padding: 10px 20px;
+  background: #999;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-cancelar:hover {
+  background: #777;
+}
+
+.item-conta-editando {
+  flex-direction: column;
+  align-items: stretch;
+}
+
 .comissao-card {
   background: var(--cor-fundo);
   padding: 20px;
