@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import Conciliacao from './Conciliacao';
 import './App.css';
 
 // Configuração Supabase
@@ -328,7 +329,8 @@ export default function App() {
             { id: 'visao-geral', label: 'Visão Geral' },
             { id: 'contas-pagar', label: 'Contas a Pagar' },
             { id: 'comissoes', label: 'Comissões' },
-            { id: 'transferencias', label: 'Transferências' }
+            { id: 'transferencias', label: 'Transferências' },
+            { id: 'conciliacao', label: 'Conciliação' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -609,6 +611,10 @@ export default function App() {
                 </div>
               )}
             </div>
+          )}
+
+          {activeTab === 'conciliacao' && (
+            <Conciliacao contasAPagar={contasAPagar} />
           )}
         </div>
 
