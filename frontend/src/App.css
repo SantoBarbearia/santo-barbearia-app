@@ -1,0 +1,390 @@
+:root {
+  --cor-principal: #094A00;
+  --cor-claro: #0d6b00;
+  --cor-fundo: #f5f5f5;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--cor-fundo);
+}
+
+.app {
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid var(--cor-principal);
+}
+
+.header h1 {
+  color: var(--cor-principal);
+  font-size: 28px;
+  margin-bottom: 5px;
+}
+
+.subtitle {
+  color: #666;
+  font-size: 14px;
+}
+
+.cards-saldos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 15px;
+  margin-bottom: 30px;
+}
+
+.card-saldo {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-left: 5px solid var(--cor-principal);
+}
+
+.card-saldo.total {
+  background: var(--cor-principal);
+  color: white;
+  border-left-color: var(--cor-claro);
+}
+
+.card-saldo .label {
+  font-size: 12px;
+  color: #999;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.card-saldo.total .label {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.card-saldo .valor {
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--cor-principal);
+}
+
+.card-saldo.total .valor {
+  color: white;
+}
+
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #eee;
+  flex-wrap: wrap;
+}
+
+.tab {
+  padding: 12px 20px;
+  border: none;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  font-weight: 500;
+  border-bottom: 3px solid transparent;
+  transition: all 0.3s;
+}
+
+.tab:hover {
+  color: var(--cor-principal);
+}
+
+.tab.ativo {
+  color: var(--cor-principal);
+  border-bottom-color: var(--cor-principal);
+}
+
+.conteudo {
+  animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.card {
+  background: white;
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+.card h3 {
+  color: var(--cor-principal);
+  margin-bottom: 20px;
+  font-size: 18px;
+}
+
+.resumo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+}
+
+.resumo-item {
+  background: var(--cor-fundo);
+  padding: 15px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.resumo-item p:first-child {
+  color: #999;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.valor-resumo {
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--cor-principal);
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tabela td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.tabela tr:hover {
+  background: var(--cor-fundo);
+}
+
+.item-conta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px;
+  background: var(--cor-fundo);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.info-conta {
+  flex: 1;
+  min-width: 200px;
+}
+
+.desc {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.venc {
+  font-size: 12px;
+  color: #999;
+}
+
+.valor-conta {
+  font-weight: bold;
+  color: var(--cor-principal);
+  font-size: 16px;
+  min-width: 100px;
+  text-align: right;
+}
+
+.acoes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.acoes select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.btn-pagar {
+  padding: 6px 15px;
+  background: var(--cor-principal);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-pagar:hover:not(:disabled) {
+  background: var(--cor-claro);
+}
+
+.btn-pagar:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.comissao-card {
+  background: var(--cor-fundo);
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  border-left: 4px solid var(--cor-principal);
+}
+
+.comissao-card h4 {
+  color: var(--cor-principal);
+  margin-bottom: 15px;
+  font-size: 16px;
+}
+
+.grid-comissao {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.input-group label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.input-group input {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.total-comissao {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: white;
+  border-radius: 4px;
+  font-weight: bold;
+  color: var(--cor-principal);
+}
+
+.form-transferencia {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.btn-transferir {
+  padding: 10px 20px;
+  background: var(--cor-principal);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.3s;
+  grid-column: auto;
+}
+
+.btn-transferir:hover:not(:disabled) {
+  background: var(--cor-claro);
+}
+
+.btn-transferir:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.historico {
+  margin-top: 30px;
+}
+
+.historico h3 {
+  color: var(--cor-principal);
+  margin-bottom: 15px;
+}
+
+.footer {
+  text-align: center;
+  padding: 20px;
+  color: #999;
+  font-size: 13px;
+  margin-top: 40px;
+}
+
+.carregando {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 18px;
+  color: var(--cor-principal);
+}
+
+@media (max-width: 768px) {
+  .header h1 {
+    font-size: 22px;
+  }
+
+  .card {
+    padding: 15px;
+  }
+
+  .item-conta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .valor-conta {
+    width: 100%;
+    text-align: left;
+  }
+
+  .tabs {
+    gap: 5px;
+  }
+
+  .tab {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  .grid-comissao {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .form-transferencia {
+    grid-template-columns: 1fr;
+  }
+}
