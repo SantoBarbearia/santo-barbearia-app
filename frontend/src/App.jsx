@@ -20,6 +20,7 @@ const CATEGORIAS_CONTABEIS = [
   'Salários e Comissões',
   'Impostos e Taxas',
   'Fornecedores e Produtos',
+  'Taxas de Cartão/Maquininha',
   'Assinaturas e Sistemas',
   'Marketing e Publicidade',
   'Manutenção e Reparos',

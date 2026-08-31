@@ -8,22 +8,27 @@ import {
   parsePDF,
   detectarFormatoConhecido,
   parseSicrediPagamentos,
+  parseSicrediVendas,
   parseBalancoSistema,
+  calcularTaxasPagamentos,
+  calcularTaxasVendas,
   lerTextoArquivo
 } from './conciliacao/parsers';
 import { conciliar } from './conciliacao/matching';
 
-const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null };
+const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null };
 
 const NOTAS_FORMATO = {
   'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
-  'balanco-sistema': 'Balanço do sistema reconhecido: mostrando só os recebimentos via PIX já marcados como pagos (os pagos no cartão já são cobertos pela conciliação com a maquininha).'
+  'sicredi-vendas': 'Relatório de Vendas da Sicredi reconhecido: uma linha por venda (valor bruto, antes do desconto da maquininha), pra conferir com o Sistema.',
+  'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.'
 };
 
 const LABELS_FONTE = {
   extrato: 'Extrato Bancário',
   sistema: 'Relatório do Sistema',
-  maquininha: 'Relatório da Maquininha'
+  maquininha: 'Relatório de Pagamentos da Maquininha',
+  vendas: 'Relatório de Vendas da Maquininha (opcional)'
 };
 
 function formatarMoeda(valor) {
@@ -40,7 +45,8 @@ export default function Conciliacao({ contasAPagar }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
-    maquininha: { ...FONTE_VAZIA }
+    maquininha: { ...FONTE_VAZIA },
+    vendas: { ...FONTE_VAZIA }
   });
   const [mapeando, setMapeando] = useState(null);
   const [mapeamentoForm, setMapeamentoForm] = useState({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
@@ -51,14 +57,14 @@ export default function Conciliacao({ contasAPagar }) {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
   };
 
-  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota) => {
+  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota, taxaMaquininha) => {
     if (linhas.length === 0) {
       atualizarFonte(chave, {
         carregando: false,
         erro: `O arquivo "${nomeArquivo}" foi lido, mas não encontramos nenhum lançamento nele. Confira se é o arquivo certo e se o período selecionado não veio vazio.`
       });
     } else {
-      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null });
+      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null, taxaMaquininha: taxaMaquininha ?? null });
     }
   };
 
@@ -76,17 +82,27 @@ export default function Conciliacao({ contasAPagar }) {
         const bruto = ext === 'csv' ? await parseCSVBruto(await lerTextoArquivo(arquivo)) : await parseXLSXBruto(await arquivo.arrayBuffer());
         const formato = detectarFormatoConhecido(bruto);
 
-        if (formato === 'sicredi-pagamentos') {
+        if (formato === 'sicredi-pagamentos' && chave === 'vendas') {
+          atualizarFonte(chave, {
+            carregando: false,
+            erro: 'Esse é o relatório de Pagamentos (valores líquidos) — suba ele em cima, em "Relatório de Pagamentos da Maquininha", que é o que concilia com o extrato.'
+          });
+        } else if (formato === 'sicredi-vendas' && chave === 'maquininha') {
+          atualizarFonte(chave, {
+            carregando: false,
+            erro: 'Esse é o relatório de Vendas (valores brutos) — suba ele no campo "Relatório de Vendas da Maquininha" abaixo, que é o que concilia com o Sistema. Pra conciliar com o extrato, use o relatório de Pagamentos.'
+          });
+        } else if (formato === 'sicredi-pagamentos') {
           const linhas = parseSicrediPagamentos(bruto);
-          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
+          const taxaMaquininha = calcularTaxasPagamentos(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha);
+        } else if (formato === 'sicredi-vendas') {
+          const linhas = parseSicrediVendas(bruto);
+          const taxaMaquininha = calcularTaxasVendas(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha);
         } else if (formato === 'balanco-sistema') {
           const linhas = parseBalancoSistema(bruto);
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
-        } else if (formato === 'sicredi-vendas') {
-          atualizarFonte(chave, {
-            carregando: false,
-            erro: 'Este é o relatório de Vendas (valores brutos, antes do desconto da maquininha). Pra conciliar com o banco, envie o relatório de Pagamentos da Sicredi, que já vem com os valores líquidos.'
-          });
         } else {
           atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
           setMapeamentoForm({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
@@ -153,8 +169,10 @@ export default function Conciliacao({ contasAPagar }) {
   const executarConciliacao = () => {
     const entradasExtrato = fontes.extrato.linhas.filter((l) => l.tipo === 'entrada');
     const saidasExtrato = fontes.extrato.linhas.filter((l) => l.tipo === 'saida');
-    const sistema = fontes.sistema.linhas;
+    const sistemaPix = fontes.sistema.linhas.filter((l) => l.viaPix !== false);
+    const sistemaCartao = fontes.sistema.linhas.filter((l) => l.viaCartao === true);
     const maquininha = fontes.maquininha.linhas;
+    const vendas = fontes.vendas.linhas;
 
     const pagamentosApp = contasAPagar
       .filter((c) => c.status === 'Pago')
@@ -169,9 +187,14 @@ export default function Conciliacao({ contasAPagar }) {
         };
       });
 
-    const passo1 = conciliar(entradasExtrato, sistema);
+    const passo1 = conciliar(entradasExtrato, sistemaPix);
     const passo2 = conciliar(passo1.semParA, maquininha);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
+    const passo4 = conciliar(vendas, sistemaCartao);
+
+    // Prefere a taxa calculada a partir de Pagamentos (inclui antecipação); Vendas
+    // só tem o desconto de MDR, então serve de estimativa quando só ele foi carregado.
+    const taxaMaquininha = fontes.maquininha.taxaMaquininha ?? fontes.vendas.taxaMaquininha ?? null;
 
     setResultado({
       recebimentos: {
@@ -185,7 +208,13 @@ export default function Conciliacao({ contasAPagar }) {
         conciliado: passo3.pares.length,
         semCorrespondenciaExtrato: passo3.semParA,
         semCorrespondenciaApp: passo3.semParB
-      }
+      },
+      vendasCartao: {
+        conciliado: passo4.pares.length,
+        semCorrespondenciaVendas: passo4.semParA,
+        semCorrespondenciaSistema: passo4.semParB
+      },
+      taxaMaquininha
     });
     setIgnorados(new Set());
   };
@@ -338,6 +367,7 @@ export default function Conciliacao({ contasAPagar }) {
       {renderUpload('extrato')}
       {renderUpload('sistema')}
       {renderUpload('maquininha')}
+      {renderUpload('vendas')}
 
       {temAlgumaFonte && (
         <div className="card">
@@ -391,6 +421,37 @@ export default function Conciliacao({ contasAPagar }) {
               )}
             </div>
           </div>
+
+          {fontes.vendas.linhas.length > 0 && (
+            <div className="card">
+              <h3>Vendas no Cartão vs. Sistema</h3>
+              <p className="upload-dica">Compara o valor bruto de cada venda no cartão com a comanda correspondente no seu sistema.</p>
+              <div className="resumo-grid">
+                <div className="resumo-item">
+                  <p>Conciliado</p>
+                  <p className="valor-resumo">{resultado.vendasCartao.conciliado}</p>
+                </div>
+              </div>
+              <div style={{ marginTop: 15 }}>
+                {renderDivergencias('Vendas no cartão sem comanda correspondente no sistema:', resultado.vendasCartao.semCorrespondenciaVendas, 'Maquininha')}
+                {renderDivergencias('Comanda paga no cartão sem venda correspondente na maquininha:', resultado.vendasCartao.semCorrespondenciaSistema, 'Sistema')}
+                {resultado.vendasCartao.semCorrespondenciaVendas.filter(l => !ignorados.has(l.id)).length === 0 &&
+                  resultado.vendasCartao.semCorrespondenciaSistema.filter(l => !ignorados.has(l.id)).length === 0 && (
+                  <p>✅ Tudo conciliado.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {resultado.taxaMaquininha > 0 && (
+            <div className="card">
+              <h3>Taxas da Maquininha</h3>
+              <p className="nota-formato">
+                A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
+                Pra bater com o saldo do banco, considere lançar esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>

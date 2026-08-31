@@ -215,9 +215,10 @@ export function parseSicrediPagamentos(linhas) {
 }
 
 // Exportação do sistema (balanço): mistura recebimentos, pagamentos e linhas de
-// resumo num único CSV. Só os recebimentos "A RECEBER" já pagos via PIX aparecem
-// individualmente no extrato — os pagos no cartão já estão cobertos pela
-// conciliação com a maquininha, e os "Em aberto" ainda não viraram dinheiro.
+// resumo num único CSV. Só os recebimentos "A RECEBER" já pagos entram — via Pix
+// (que aparecem individualmente no extrato) ou via cartão (que batem com o
+// relatório de Vendas da maquininha, não com o extrato direto). "Em aberto" ainda
+// não virou dinheiro, então fica de fora.
 export function parseBalancoSistema(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Tipo');
   const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
@@ -227,7 +228,11 @@ export function parseBalancoSistema(linhas) {
     const r = linhas[i];
     if (String(r[0] || '').trim() !== 'A RECEBER') continue;
     if (String(r[7] || '').trim() !== 'Pago') continue;
-    if (!/^pix/i.test(String(r[3] || '').trim())) continue;
+
+    const formaPagamento = String(r[3] || '').trim();
+    const viaPix = /^pix/i.test(formaPagamento);
+    const viaCartao = /crédito|débito|cartão/i.test(formaPagamento);
+    if (!viaPix && !viaCartao) continue;
 
     const valor = parseValorBR(r[6]);
     if (!(valor > 0)) continue;
@@ -239,11 +244,69 @@ export function parseBalancoSistema(linhas) {
       data,
       descricao: String(r[1] || 'Recebimento'),
       valor,
-      tipo: 'entrada'
+      tipo: 'entrada',
+      viaPix,
+      viaCartao
     });
   }
 
   return registros;
+}
+
+// Relatório de Vendas da maquininha Sicredi: cada parcela de uma venda parcelada
+// vira uma linha própria, mas "Valor bruto da transação" já repete o valor total
+// da venda em todas elas — então agrupamos por "Comprovante de venda" pra
+// reconstruir uma linha por venda (o que bate com uma comanda do sistema).
+export function parseSicrediVendas(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data da venda');
+  if (idxCabecalho === -1) return [];
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  const vistos = new Map();
+  dados.forEach((r) => {
+    const comprovante = r[5];
+    if (!comprovante || vistos.has(comprovante)) return;
+
+    const data = paraDataISO(r[0]);
+    const valorBruto = parseValorBR(r[14]);
+    const bandeira = r[12];
+    if (!data || !(valorBruto > 0)) return;
+
+    vistos.set(comprovante, {
+      id: novoId('venda'),
+      data,
+      descricao: `Venda no cartão - ${bandeira}`,
+      valor: Math.round(valorBruto * 100) / 100,
+      tipo: 'entrada'
+    });
+  });
+
+  return Array.from(vistos.values());
+}
+
+// Soma bruto - líquido do relatório de Vendas (só o desconto de MDR — se o
+// relatório de Pagamentos também estiver carregado, use calcularTaxasPagamentos,
+// que já inclui antecipação e é mais precisa).
+export function calcularTaxasVendas(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data da venda');
+  if (idxCabecalho === -1) return 0;
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+  const total = dados.reduce((soma, r) => soma + (parseValorBR(r[17]) || 0), 0);
+  return Math.round(total * 100) / 100;
+}
+
+// Soma bruto - líquido do relatório de Pagamentos (inclui MDR e antecipação —
+// é o valor mais preciso do total de taxas cobradas pela maquininha).
+export function calcularTaxasPagamentos(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data de pagamento');
+  if (idxCabecalho === -1) return 0;
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+  const total = dados.reduce((soma, r) => {
+    const bruto = parseValorBR(r[18]) || 0;
+    const liquido = parseValorBR(r[22]) || 0;
+    return soma + (bruto - liquido);
+  }, 0);
+  return Math.round(total * 100) / 100;
 }
 
 export function normalizarComMapeamento(linhasBrutas, mapeamento) {
