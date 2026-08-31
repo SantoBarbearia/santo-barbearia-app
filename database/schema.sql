@@ -72,6 +72,31 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Fechamentos Mensais (histórico do resumo de faturamento/comissões)
+CREATE TABLE IF NOT EXISTS fechamentos (
+  id BIGINT PRIMARY KEY,
+  mes VARCHAR(7) NOT NULL,
+  "mesLabel" VARCHAR(20),
+  "faturamentoServicos" DECIMAL(10, 2) DEFAULT 0,
+  "faturamentoProdutos" DECIMAL(10, 2) DEFAULT 0,
+  "faturamentoAssinatura" DECIMAL(10, 2) DEFAULT 0,
+  "comissaoBruta" DECIMAL(10, 2) DEFAULT 0,
+  "totalVale" DECIMAL(10, 2) DEFAULT 0,
+  "totalConsumo" DECIMAL(10, 2) DEFAULT 0,
+  "totalMei" DECIMAL(10, 2) DEFAULT 0,
+  "comissaoLiquida" DECIMAL(10, 2) DEFAULT 0,
+  "dataFechamento" DATE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabela de Observações do Dashboard (notas/eventos livres)
+CREATE TABLE IF NOT EXISTS notas_dashboard (
+  id BIGINT PRIMARY KEY,
+  data DATE NOT NULL,
+  texto TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security) - Modo teste (desabilitado por enquanto)
 -- ALTER TABLE contas ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE contas_pagar ENABLE ROW LEVEL SECURITY;
