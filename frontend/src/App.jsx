@@ -106,15 +106,10 @@ export default function App() {
       // Todas as tabelas são carregadas em paralelo (e não uma depois da
       // outra) — com 7 tabelas hoje, esperar cada uma terminar antes de
       // começar a próxima deixava o carregamento visivelmente mais lento.
-      const [
-        { data: contasData },
-        { data: contasPagarData },
-        { data: comissoesData },
-        { data: movimentacoesData },
-        { data: fechamentosData },
-        { data: notasData },
-        { data: categoriasData }
-      ] = await Promise.all([
+      // Um limite de tempo evita que a tela de "Conectando..." fique presa
+      // pra sempre se o Supabase estiver fora do ar (ex: projeto do plano
+      // gratuito pausado por inatividade).
+      const buscarDados = Promise.all([
         supabase.from('contas').select('*').single(),
         supabase.from('contas_pagar').select('*'),
         supabase.from('comissoes').select('*').single(),
@@ -123,6 +118,19 @@ export default function App() {
         supabase.from('notas_dashboard').select('*'),
         supabase.from('categorias_contabeis').select('*')
       ]);
+      const semResposta = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('tempo esgotado')), 20000)
+      );
+
+      const [
+        { data: contasData },
+        { data: contasPagarData },
+        { data: comissoesData },
+        { data: movimentacoesData },
+        { data: fechamentosData },
+        { data: notasData },
+        { data: categoriasData }
+      ] = await Promise.race([buscarDados, semResposta]);
 
       if (contasData) setContas(contasData);
       if (contasPagarData) setContasAPagar(contasPagarData);
@@ -134,7 +142,13 @@ export default function App() {
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
-      alert('Erro ao conectar com Supabase. Verifique suas credenciais!');
+      alert(
+        'Não consegui conectar com o Supabase depois de 20 segundos.\n\n' +
+        'A causa mais comum é o projeto do Supabase ter pausado por inatividade ' +
+        '(acontece automaticamente no plano gratuito). Acesse supabase.com, entre no ' +
+        'projeto e clique em "Restore project" se ele estiver marcado como pausado, ' +
+        'depois recarregue esta página.'
+      );
     } finally {
       setCarregando(false);
       setLoading(false);
