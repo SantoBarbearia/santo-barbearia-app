@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Conciliacao from './Conciliacao';
 import Dashboard from './Dashboard';
+import CategoriaSelect from './CategoriaSelect';
+import GerenciarCategorias from './GerenciarCategorias';
 import './App.css';
 
 // Configuração Supabase
@@ -10,23 +12,6 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Inicializar Supabase
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-const CATEGORIAS_CONTABEIS = [
-  'Receita de Serviços',
-  'Receita de Produtos',
-  'Outras Receitas',
-  'Aluguel e Ocupação',
-  'Água, Luz e Internet',
-  'Salários e Comissões',
-  'Impostos e Taxas',
-  'Fornecedores e Produtos',
-  'Taxas de Cartão/Maquininha',
-  'Assinaturas e Sistemas',
-  'Marketing e Publicidade',
-  'Manutenção e Reparos',
-  'Serviços Contábeis/Jurídicos',
-  'Outras Despesas'
-];
 
 const BARBEIROS_CHAVES = ['eduardo', 'gabriel', 'thais', 'thiago'];
 const CAMPOS_COMISSAO = ['servicos', 'produtos', 'assinatura', 'vale', 'consumo', 'mei'];
@@ -79,10 +64,10 @@ export default function App() {
   ]);
 
   const [comissoes, setComissoes] = useState({
-    eduardo: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 },
-    gabriel: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 },
-    thais: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 },
-    thiago: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 }
+    eduardo: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 0 },
+    gabriel: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 0 },
+    thais: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 0 },
+    thiago: { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 0 }
   });
 
   const [movimentacoes, setMovimentacoes] = useState([]);
@@ -100,6 +85,12 @@ export default function App() {
   const [periodoFim, setPeriodoFim] = useState('');
   const [fechamentos, setFechamentos] = useState([]);
   const [notas, setNotas] = useState([]);
+  const [categorias, setCategorias] = useState([]);
+
+  const [vgPeriodoInicio, setVgPeriodoInicio] = useState('');
+  const [vgPeriodoFim, setVgPeriodoFim] = useState('');
+  const [vgTipoConta, setVgTipoConta] = useState('todas');
+  const [mostrarDetalheAbertas, setMostrarDetalheAbertas] = useState(false);
 
   // Carregar dados do Supabase
   useEffect(() => {
@@ -134,6 +125,10 @@ export default function App() {
       const { data: notasData } = await supabase.from('notas_dashboard').select('*');
       if (notasData) setNotas(notasData);
 
+      // Carregar classificações contábeis
+      const { data: categoriasData } = await supabase.from('categorias_contabeis').select('*');
+      if (categoriasData) setCategorias(categoriasData);
+
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
       alert('Erro ao conectar com Supabase. Verifique suas credenciais!');
@@ -146,7 +141,7 @@ export default function App() {
   // Salvar dados no Supabase. Campos omitidos usam o valor atual do estado.
   const salvarDados = async (dadosParciais = {}) => {
     const dados = {
-      contas, contasAPagar, comissoes, movimentacoes, fechamentos, notas,
+      contas, contasAPagar, comissoes, movimentacoes, fechamentos, notas, categorias,
       ...dadosParciais
     };
     try {
@@ -179,13 +174,18 @@ export default function App() {
       if (dados.notas.length > 0) {
         await supabase.from('notas_dashboard').insert(dados.notas);
       }
+
+      // Delete e reinsert classificações contábeis
+      await supabase.from('categorias_contabeis').delete().neq('id', -1);
+      if (dados.categorias.length > 0) {
+        await supabase.from('categorias_contabeis').insert(dados.categorias);
+      }
     } catch (erro) {
       console.error('Erro ao salvar:', erro);
     }
   };
 
   const totalSaldo = Object.values(contas).reduce((a, b) => a + b, 0);
-  const totalAPagar = contasAPagar.filter(c => c.status === 'Aberto').reduce((sum, c) => sum + c.valor, 0);
 
   const nomesContas = {
     caixa: 'Caixa',
@@ -208,6 +208,63 @@ export default function App() {
   };
 
   const contasAPagarFiltradas = contasAPagar.filter(c => dentroDoPeriodo(c.vencimento));
+
+  // A tabela movimentacoes tem datas guardadas em dois formatos diferentes
+  // dependendo de onde foram criadas (ISO yyyy-mm-dd ou BR dd/mm/yyyy) —
+  // esse helper normaliza os dois pra ISO antes de comparar com o filtro.
+  const dataMovParaISO = (data) => {
+    if (!data) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(data)) return data;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return dataBRparaISO(data);
+    return data;
+  };
+
+  const dentroDoPeriodoVG = (dataISO) => {
+    if (!vgPeriodoInicio && !vgPeriodoFim) return true;
+    if (vgPeriodoInicio && dataISO < vgPeriodoInicio) return false;
+    if (vgPeriodoFim && dataISO > vgPeriodoFim) return false;
+    return true;
+  };
+
+  // Contas a Pagar dentro do período selecionado na Visão Geral (por vencimento)
+  const contasAPagarVG = contasAPagar.filter(c => dentroDoPeriodoVG(dataBRparaISO(c.vencimento)));
+  const abertasVG = contasAPagarVG.filter(c => c.status === 'Aberto');
+  const totalAPagarVG = abertasVG.reduce((soma, c) => soma + c.valor, 0);
+
+  // Movimentações dentro do período selecionado na Visão Geral
+  const movimentacoesVG = movimentacoes.filter(m => dentroDoPeriodoVG(dataMovParaISO(m.data)));
+  const movimentacoesVGporConta = movimentacoesVG.filter(m => {
+    if (vgTipoConta === 'todas') return true;
+    if (m.tipo === 'Transferência') return m.de === vgTipoConta || m.para === vgTipoConta;
+    return m.conta === vgTipoConta;
+  });
+
+  // Saldo do período (entradas, saídas e saldo) por tipo de conta
+  const contasParaSaldoVG = vgTipoConta === 'todas' ? Object.keys(nomesContas) : [vgTipoConta];
+  const saldoPorContaVG = contasParaSaldoVG.map(chave => {
+    let entradas = 0;
+    let saidas = 0;
+    movimentacoesVG.forEach(m => {
+      if (m.tipo === 'Transferência') {
+        if (m.de === chave) saidas += m.valor;
+        if (m.para === chave) entradas += m.valor;
+      } else if (m.conta === chave) {
+        if (m.tipo === 'Despesa Paga' || m.tipo === 'Débito Manual') {
+          saidas += m.valor;
+        } else {
+          entradas += m.valor;
+        }
+      }
+    });
+    return { chave, nome: nomesContas[chave], entradas, saidas, saldo: entradas - saidas };
+  });
+
+  // Classifica uma movimentação como entrada/saída/transferência pra exibição
+  const tipoVisualMovimentacao = (mov) => {
+    if (mov.tipo === 'Transferência') return 'transferencia';
+    if (mov.tipo === 'Despesa Paga' || mov.tipo === 'Débito Manual') return 'saida';
+    return 'entrada';
+  };
 
   const proximoVencimento = (dataBR) => {
     const [dia, mes, ano] = dataBR.split('/').map(Number);
@@ -433,7 +490,7 @@ export default function App() {
     const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
     const mesLabel = `${nomesMeses[hoje.getMonth()]}/${hoje.getFullYear()}`;
 
-    if (!window.confirm(`Fechar ${mesLabel}? Isso salva uma foto das comissões atuais no histórico do Dashboard e zera os campos da aba Comissões pra um novo ciclo (o MEI volta para R$ 86,05).`)) return;
+    if (!window.confirm(`Fechar ${mesLabel}? Isso salva uma foto das comissões atuais no histórico do Dashboard e zera todos os campos da aba Comissões (incluindo o MEI) pra um novo ciclo.`)) return;
 
     const novoFechamento = {
       id: Date.now(),
@@ -453,7 +510,7 @@ export default function App() {
 
     const comissoesZeradas = {};
     BARBEIROS_CHAVES.forEach(b => {
-      comissoesZeradas[b] = { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 86.05 };
+      comissoesZeradas[b] = { servicos: 0, produtos: 0, assinatura: 0, vale: 0, consumo: 0, mei: 0 };
     });
 
     setFechamentos(novosFechamentos);
@@ -474,6 +531,22 @@ export default function App() {
     const novasNotas = notas.filter(n => n.id !== id);
     setNotas(novasNotas);
     salvarDados({ notas: novasNotas });
+  };
+
+  const handleAdicionarCategoria = (nivel1, nivel2) => {
+    if (!nivel1.trim() || !nivel2.trim()) return;
+    const jaExiste = categorias.some(c => c.nivel1 === nivel1.trim() && c.nivel2 === nivel2.trim());
+    if (jaExiste) return;
+    const novaCategoria = { id: Date.now(), nivel1: nivel1.trim(), nivel2: nivel2.trim() };
+    const novasCategorias = [...categorias, novaCategoria];
+    setCategorias(novasCategorias);
+    salvarDados({ categorias: novasCategorias });
+  };
+
+  const handleExcluirCategoria = (id) => {
+    const novasCategorias = categorias.filter(c => c.id !== id);
+    setCategorias(novasCategorias);
+    salvarDados({ categorias: novasCategorias });
   };
 
   // Lança na Conta Corrente (Sicredi) um lançamento do extrato que a Conciliação
@@ -634,12 +707,11 @@ export default function App() {
                   </div>
                   <div className="input-group">
                     <label>Classificação Contábil</label>
-                    <select value={ajuste.categoria} onChange={(e) => setAjuste({ ...ajuste, categoria: e.target.value })}>
-                      <option value="">Selecionar...</option>
-                      {CATEGORIAS_CONTABEIS.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
+                    <CategoriaSelect
+                      categorias={categorias}
+                      value={ajuste.categoria}
+                      onChange={(valor) => setAjuste({ ...ajuste, categoria: valor })}
+                    />
                   </div>
                   <button
                     onClick={handleAjustarSaldo}
@@ -652,33 +724,122 @@ export default function App() {
               </div>
 
               <div className="card">
-                <h3>Resumo Financeiro</h3>
-                <div className="resumo-grid">
-                  <div className="resumo-item">
-                    <p>Total a Pagar</p>
-                    <p className="valor-resumo">R$ {totalAPagar.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                <h3>Filtrar Resumo por Período e Conta</h3>
+                <div className="form-transferencia">
+                  <div className="input-group">
+                    <label>De</label>
+                    <input type="date" value={vgPeriodoInicio} onChange={(e) => setVgPeriodoInicio(e.target.value)} />
                   </div>
-                  <div className="resumo-item">
-                    <p>Contas Abertas</p>
-                    <p className="valor-resumo">{contasAPagar.filter(c => c.status === 'Aberto').length}</p>
+                  <div className="input-group">
+                    <label>Até</label>
+                    <input type="date" value={vgPeriodoFim} onChange={(e) => setVgPeriodoFim(e.target.value)} />
                   </div>
+                  <div className="input-group">
+                    <label>Tipo de Conta</label>
+                    <select value={vgTipoConta} onChange={(e) => setVgTipoConta(e.target.value)}>
+                      <option value="todas">Todas</option>
+                      {Object.entries(nomesContas).map(([chave, nome]) => (
+                        <option key={chave} value={chave}>{nome}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={() => { setVgPeriodoInicio(''); setVgPeriodoFim(''); setVgTipoConta('todas'); }}
+                    className="btn-cancelar"
+                  >
+                    Limpar filtro
+                  </button>
                 </div>
               </div>
 
               <div className="card">
-                <h3>Movimentações Recentes</h3>
-                {movimentacoes.length === 0 ? (
-                  <p>Nenhuma movimentação registrada</p>
+                <h3>Resumo Financeiro {(vgPeriodoInicio || vgPeriodoFim) ? 'do Período' : ''}</h3>
+                <div className="resumo-grid">
+                  <div
+                    className="resumo-item clicavel"
+                    onClick={() => setMostrarDetalheAbertas(!mostrarDetalheAbertas)}
+                  >
+                    <p>Total a Pagar</p>
+                    <p className="valor-resumo">R$ {totalAPagarVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                    <p className="dica-clicar">clique para ver o detalhamento</p>
+                  </div>
+                  <div
+                    className="resumo-item clicavel"
+                    onClick={() => setMostrarDetalheAbertas(!mostrarDetalheAbertas)}
+                  >
+                    <p>Contas Abertas</p>
+                    <p className="valor-resumo">{abertasVG.length}</p>
+                    <p className="dica-clicar">clique para ver o detalhamento</p>
+                  </div>
+                </div>
+
+                {mostrarDetalheAbertas && (
+                  <div className="detalhe-lista">
+                    {abertasVG.length === 0 ? (
+                      <p>Nenhuma conta em aberto {(vgPeriodoInicio || vgPeriodoFim) ? 'nesse período' : ''}.</p>
+                    ) : (
+                      <table className="tabela">
+                        <tbody>
+                          {abertasVG.map(conta => (
+                            <tr key={conta.id}>
+                              <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
+                              <td>Vencimento: {conta.vencimento}</td>
+                              <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="card">
+                <h3>Saldo do Período por Tipo de Conta</h3>
+                <table className="tabela-saldo-conta">
+                  <thead>
+                    <tr>
+                      <th>Conta</th>
+                      <th>Entradas</th>
+                      <th>Saídas</th>
+                      <th>Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {saldoPorContaVG.map(linha => (
+                      <tr key={linha.chave}>
+                        <td>{linha.nome}</td>
+                        <td className="valor-entrada">R$ {linha.entradas.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td className="valor-saida">R$ {linha.saidas.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td>R$ {linha.saldo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="card">
+                <h3>Movimentações Recentes {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''}</h3>
+                {movimentacoesVGporConta.length === 0 ? (
+                  <p>Nenhuma movimentação {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
                 ) : (
                   <table className="tabela">
                     <tbody>
-                      {movimentacoes.slice(-5).reverse().map((mov) => (
-                        <tr key={mov.id}>
-                          <td>{mov.data}</td>
-                          <td>{mov.descricao}{mov.categoria && <span className="badge-categoria"> {mov.categoria}</span>}</td>
-                          <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        </tr>
-                      ))}
+                      {movimentacoesVGporConta.slice(-8).reverse().map((mov) => {
+                        const tipoVisual = tipoVisualMovimentacao(mov);
+                        return (
+                          <tr key={mov.id}>
+                            <td>{mov.data}</td>
+                            <td>
+                              <span className={`badge-${tipoVisual}`}>
+                                {tipoVisual === 'entrada' ? 'Entrada' : tipoVisual === 'saida' ? 'Saída' : 'Transferência'}
+                              </span>
+                              {mov.descricao}{mov.categoria && <span className="badge-categoria"> {mov.categoria}</span>}
+                            </td>
+                            <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -719,12 +880,11 @@ export default function App() {
                   </div>
                   <div className="input-group">
                     <label>Classificação Contábil</label>
-                    <select value={novaConta.categoria} onChange={(e) => setNovaConta({ ...novaConta, categoria: e.target.value })}>
-                      <option value="">Selecionar...</option>
-                      {CATEGORIAS_CONTABEIS.map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
+                    <CategoriaSelect
+                      categorias={categorias}
+                      value={novaConta.categoria}
+                      onChange={(valor) => setNovaConta({ ...novaConta, categoria: valor })}
+                    />
                   </div>
                   <div className="input-group">
                     <label>
@@ -806,12 +966,11 @@ export default function App() {
                         </div>
                         <div className="input-group">
                           <label>Classificação Contábil</label>
-                          <select value={contaEditando.categoria} onChange={(e) => setContaEditando({ ...contaEditando, categoria: e.target.value })}>
-                            <option value="">Selecionar...</option>
-                            {CATEGORIAS_CONTABEIS.map(cat => (
-                              <option key={cat} value={cat}>{cat}</option>
-                            ))}
-                          </select>
+                          <CategoriaSelect
+                            categorias={categorias}
+                            value={contaEditando.categoria}
+                            onChange={(valor) => setContaEditando({ ...contaEditando, categoria: valor })}
+                          />
                         </div>
                         <div className="input-group">
                           <label>
@@ -902,9 +1061,9 @@ export default function App() {
                 <div key={barb.chave} className="comissao-card">
                   <h4>{barb.nome}</h4>
                   <div className="grid-comissao">
-                    {['servicos', 'produtos', 'assinatura', 'vale', 'consumo'].map(campo => (
+                    {['servicos', 'produtos', 'assinatura', 'vale', 'consumo', 'mei'].map(campo => (
                       <div key={campo} className="input-group">
-                        <label>{campo.charAt(0).toUpperCase() + campo.slice(1)}</label>
+                        <label>{campo === 'mei' ? 'MEI (imposto mensal)' : campo.charAt(0).toUpperCase() + campo.slice(1)}</label>
                         <input
                           type="number"
                           value={comissoes[barb.chave][campo]}
@@ -1001,16 +1160,23 @@ export default function App() {
           </div>
 
           {activeTab === 'dashboard' && (
-            <Dashboard
-              comissoes={comissoes}
-              barbeiros={barbeiros}
-              contasAPagar={contasAPagar}
-              fechamentos={fechamentos}
-              notas={notas}
-              onFecharMes={handleFecharMes}
-              onAdicionarNota={handleAdicionarNota}
-              onExcluirNota={handleExcluirNota}
-            />
+            <div>
+              <Dashboard
+                comissoes={comissoes}
+                barbeiros={barbeiros}
+                contasAPagar={contasAPagar}
+                fechamentos={fechamentos}
+                notas={notas}
+                onFecharMes={handleFecharMes}
+                onAdicionarNota={handleAdicionarNota}
+                onExcluirNota={handleExcluirNota}
+              />
+              <GerenciarCategorias
+                categorias={categorias}
+                onAdicionar={handleAdicionarCategoria}
+                onExcluir={handleExcluirCategoria}
+              />
+            </div>
           )}
         </div>
 

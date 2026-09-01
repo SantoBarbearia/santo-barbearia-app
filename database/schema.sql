@@ -34,25 +34,25 @@ CREATE TABLE IF NOT EXISTS comissoes (
   eduardo_assinatura DECIMAL(10, 2) DEFAULT 0,
   eduardo_vale DECIMAL(10, 2) DEFAULT 0,
   eduardo_consumo DECIMAL(10, 2) DEFAULT 0,
-  eduardo_mei DECIMAL(10, 2) DEFAULT 86.05,
+  eduardo_mei DECIMAL(10, 2) DEFAULT 0,
   gabriel_servicos DECIMAL(10, 2) DEFAULT 0,
   gabriel_produtos DECIMAL(10, 2) DEFAULT 0,
   gabriel_assinatura DECIMAL(10, 2) DEFAULT 0,
   gabriel_vale DECIMAL(10, 2) DEFAULT 0,
   gabriel_consumo DECIMAL(10, 2) DEFAULT 0,
-  gabriel_mei DECIMAL(10, 2) DEFAULT 86.05,
+  gabriel_mei DECIMAL(10, 2) DEFAULT 0,
   thais_servicos DECIMAL(10, 2) DEFAULT 0,
   thais_produtos DECIMAL(10, 2) DEFAULT 0,
   thais_assinatura DECIMAL(10, 2) DEFAULT 0,
   thais_vale DECIMAL(10, 2) DEFAULT 0,
   thais_consumo DECIMAL(10, 2) DEFAULT 0,
-  thais_mei DECIMAL(10, 2) DEFAULT 86.05,
+  thais_mei DECIMAL(10, 2) DEFAULT 0,
   thiago_servicos DECIMAL(10, 2) DEFAULT 0,
   thiago_produtos DECIMAL(10, 2) DEFAULT 0,
   thiago_assinatura DECIMAL(10, 2) DEFAULT 0,
   thiago_vale DECIMAL(10, 2) DEFAULT 0,
   thiago_consumo DECIMAL(10, 2) DEFAULT 0,
-  thiago_mei DECIMAL(10, 2) DEFAULT 86.05,
+  thiago_mei DECIMAL(10, 2) DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS notas_dashboard (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Classificações Contábeis (dois níveis, editável pelo usuário)
+CREATE TABLE IF NOT EXISTS categorias_contabeis (
+  id BIGINT PRIMARY KEY,
+  nivel1 VARCHAR(100) NOT NULL,
+  nivel2 VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security) - Modo teste (desabilitado por enquanto)
 -- ALTER TABLE contas ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE contas_pagar ENABLE ROW LEVEL SECURITY;
@@ -110,4 +118,23 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO comissoes (id)
 VALUES (1)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO categorias_contabeis (id, nivel1, nivel2) VALUES
+  (1, 'Receitas', 'Serviços'),
+  (2, 'Receitas', 'Produtos'),
+  (3, 'Receitas', 'Outras Receitas'),
+  (4, 'Custos de Ocupação', 'Aluguel'),
+  (5, 'Custos de Ocupação', 'Água, Luz e Internet'),
+  (6, 'Pessoal', 'Salários e Comissões'),
+  (7, 'Obrigações Tributárias', 'Simples Nacional'),
+  (8, 'Obrigações Tributárias', 'Outras Taxas e Impostos'),
+  (9, 'Fornecedores', 'Fornecedores e Produtos'),
+  (10, 'Taxas de Cartão/Maquininha', 'MDR (Taxa da Maquininha)'),
+  (11, 'Taxas de Cartão/Maquininha', 'Antecipação'),
+  (12, 'Assinaturas e Sistemas', 'Assinaturas e Sistemas'),
+  (13, 'Marketing', 'Marketing e Publicidade'),
+  (14, 'Manutenção', 'Manutenção e Reparos'),
+  (15, 'Serviços Profissionais', 'Contábeis/Jurídicos'),
+  (16, 'Outras Despesas', 'Outras Despesas')
 ON CONFLICT (id) DO NOTHING;
