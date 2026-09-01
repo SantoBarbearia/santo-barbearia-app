@@ -476,6 +476,30 @@ export default function App() {
     salvarDados({ notas: novasNotas });
   };
 
+  // Lança na Conta Corrente (Sicredi) um lançamento do extrato que a Conciliação
+  // não achou em nenhuma outra fonte — vira uma movimentação real, atualizando o
+  // saldo de verdade, não só uma comparação visual.
+  const handleLancarDoExtrato = (linhaExtrato) => {
+    const [ano, mes, dia] = linhaExtrato.data.split('-');
+    const delta = linhaExtrato.tipo === 'entrada' ? linhaExtrato.valor : -linhaExtrato.valor;
+    const novasContas = { ...contas, sicredi: contas.sicredi + delta };
+
+    const novaMovimentacao = {
+      id: Date.now(),
+      data: `${dia}/${mes}/${ano}`,
+      tipo: linhaExtrato.tipo === 'entrada' ? 'Crédito Manual' : 'Débito Manual',
+      descricao: `${linhaExtrato.descricao} (lançado da Conciliação)`,
+      valor: linhaExtrato.valor,
+      conta: 'sicredi',
+      categoria: ''
+    };
+    const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
   const handleTransferencia = () => {
     if (transferencia.valor <= 0 || transferencia.de === transferencia.para) return;
 
@@ -970,9 +994,11 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === 'conciliacao' && (
-            <Conciliacao contasAPagar={contasAPagar} />
-          )}
+          {/* Fica sempre montada (só escondida via CSS) pra não perder os arquivos
+              carregados e o resultado da conciliação ao trocar de aba e voltar. */}
+          <div style={{ display: activeTab === 'conciliacao' ? 'block' : 'none' }}>
+            <Conciliacao contasAPagar={contasAPagar} onLancarMovimentacao={handleLancarDoExtrato} />
+          </div>
 
           {activeTab === 'dashboard' && (
             <Dashboard

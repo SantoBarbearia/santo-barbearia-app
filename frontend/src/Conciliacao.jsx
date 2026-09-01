@@ -41,7 +41,7 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-export default function Conciliacao({ contasAPagar }) {
+export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -223,6 +223,11 @@ export default function Conciliacao({ contasAPagar }) {
     setIgnorados((s) => new Set(s).add(id));
   };
 
+  const lancarMovimentacao = (linha) => {
+    onLancarMovimentacao(linha);
+    marcarIgnorado(linha.id);
+  };
+
   const temAlgumaFonte = Object.values(fontes).some((f) => f.linhas.length > 0);
 
   const renderUpload = (chave) => {
@@ -349,6 +354,9 @@ export default function Conciliacao({ contasAPagar }) {
             </div>
             <p className="valor-conta">{formatarMoeda(l.valor)}</p>
             <div className="acoes">
+              {origemLabel === 'Extrato' && (
+                <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
+              )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
           </div>
@@ -362,6 +370,7 @@ export default function Conciliacao({ contasAPagar }) {
       <div className="card">
         <h3>Conciliação Bancária</h3>
         <p>Envie o extrato do banco e, se tiver, o relatório do sistema e/ou da maquininha. O app tenta casar os lançamentos automaticamente e mostra o que não bateu.</p>
+        <p className="upload-dica">Nos lançamentos do extrato sem correspondência, use "Lançar na Conta Corrente" pra registrar de verdade no app (atualiza o saldo do Sicredi) — é como o app fica sabendo de dinheiro que entrou ou saiu e ele ainda não tinha registrado.</p>
       </div>
 
       {renderUpload('extrato')}
