@@ -12,9 +12,11 @@ import {
   parseBalancoSistema,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
-  lerTextoArquivo
+  lerTextoArquivo,
+  paraDataISO
 } from './conciliacao/parsers';
 import { conciliar } from './conciliacao/matching';
+import CategoriaSelect from './CategoriaSelect';
 
 const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null };
 
@@ -41,7 +43,7 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -52,6 +54,7 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
   const [mapeamentoForm, setMapeamentoForm] = useState({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
   const [resultado, setResultado] = useState(null);
   const [ignorados, setIgnorados] = useState(new Set());
+  const [categoriaPorLinha, setCategoriaPorLinha] = useState({});
 
   const atualizarFonte = (chave, patch) => {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
@@ -187,9 +190,24 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
         };
       });
 
+    // Lançamentos manuais já feitos direto no app (aba Visão Geral > Adicionar
+    // Crédito/Débito, inclusive os que vieram de uma conciliação anterior) —
+    // se já batem com uma linha do extrato, não precisam ser lançados de novo.
+    const lancamentosManuaisEntrada = (movimentacoes || [])
+      .filter((m) => m.tipo === 'Crédito Manual')
+      .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'entrada' }))
+      .filter((m) => m.data);
+
+    const lancamentosManuaisSaida = (movimentacoes || [])
+      .filter((m) => m.tipo === 'Débito Manual')
+      .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'saida' }))
+      .filter((m) => m.data);
+
     const passo1 = conciliar(entradasExtrato, sistemaPix);
     const passo2 = conciliar(passo1.semParA, maquininha);
+    const passo2b = conciliar(passo2.semParA, lancamentosManuaisEntrada);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
+    const passo3b = conciliar(passo3.semParA, lancamentosManuaisSaida);
     const passo4 = conciliar(vendas, sistemaCartao);
 
     // Prefere a taxa calculada a partir de Pagamentos (inclui antecipação); Vendas
@@ -200,14 +218,18 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
       recebimentos: {
         conciliadoSistema: passo1.pares.length,
         conciliadoMaquininha: passo2.pares.length,
-        semCorrespondenciaExtrato: passo2.semParA,
+        conciliadoManual: passo2b.pares.length,
+        semCorrespondenciaExtrato: passo2b.semParA,
         semCorrespondenciaSistema: passo1.semParB,
-        semCorrespondenciaMaquininha: passo2.semParB
+        semCorrespondenciaMaquininha: passo2.semParB,
+        semCorrespondenciaManual: passo2b.semParB
       },
       pagamentos: {
         conciliado: passo3.pares.length,
-        semCorrespondenciaExtrato: passo3.semParA,
-        semCorrespondenciaApp: passo3.semParB
+        conciliadoManual: passo3b.pares.length,
+        semCorrespondenciaExtrato: passo3b.semParA,
+        semCorrespondenciaApp: passo3.semParB,
+        semCorrespondenciaManual: passo3b.semParB
       },
       vendasCartao: {
         conciliado: passo4.pares.length,
@@ -224,7 +246,7 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
   };
 
   const lancarMovimentacao = (linha) => {
-    onLancarMovimentacao(linha);
+    onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] || '' });
     marcarIgnorado(linha.id);
   };
 
@@ -355,7 +377,14 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
             <p className="valor-conta">{formatarMoeda(l.valor)}</p>
             <div className="acoes">
               {origemLabel === 'Extrato' && (
-                <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
+                <>
+                  <CategoriaSelect
+                    categorias={categorias || []}
+                    value={categoriaPorLinha[l.id] || ''}
+                    onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
+                  />
+                  <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
+                </>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
@@ -400,14 +429,20 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
                 <p>Conciliado c/ Maquininha</p>
                 <p className="valor-resumo">{resultado.recebimentos.conciliadoMaquininha}</p>
               </div>
+              <div className="resumo-item">
+                <p>Já lançado manualmente</p>
+                <p className="valor-resumo">{resultado.recebimentos.conciliadoManual}</p>
+              </div>
             </div>
             <div style={{ marginTop: 15 }}>
               {renderDivergencias('Entradas no extrato sem correspondência:', resultado.recebimentos.semCorrespondenciaExtrato, 'Extrato')}
               {renderDivergencias('No Sistema mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaSistema, 'Sistema')}
               {renderDivergencias('Na Maquininha mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaMaquininha, 'Maquininha')}
+              {renderDivergencias('Lançado manualmente no app mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaManual, 'Lançamento Manual')}
               {resultado.recebimentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(l.id)).length === 0 &&
                 resultado.recebimentos.semCorrespondenciaSistema.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.recebimentos.semCorrespondenciaMaquininha.filter(l => !ignorados.has(l.id)).length === 0 && (
+                resultado.recebimentos.semCorrespondenciaMaquininha.filter(l => !ignorados.has(l.id)).length === 0 &&
+                resultado.recebimentos.semCorrespondenciaManual.filter(l => !ignorados.has(l.id)).length === 0 && (
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
@@ -420,12 +455,18 @@ export default function Conciliacao({ contasAPagar, onLancarMovimentacao }) {
                 <p>Conciliado c/ Contas Pagas</p>
                 <p className="valor-resumo">{resultado.pagamentos.conciliado}</p>
               </div>
+              <div className="resumo-item">
+                <p>Já lançado manualmente</p>
+                <p className="valor-resumo">{resultado.pagamentos.conciliadoManual}</p>
+              </div>
             </div>
             <div style={{ marginTop: 15 }}>
               {renderDivergencias('Saídas no extrato sem conta paga correspondente:', resultado.pagamentos.semCorrespondenciaExtrato, 'Extrato')}
               {renderDivergencias('Marcado como pago no app mas não achado no extrato:', resultado.pagamentos.semCorrespondenciaApp, 'Contas a Pagar')}
+              {renderDivergencias('Lançado manualmente no app mas não achado no extrato:', resultado.pagamentos.semCorrespondenciaManual, 'Lançamento Manual')}
               {resultado.pagamentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.pagamentos.semCorrespondenciaApp.filter(l => !ignorados.has(l.id)).length === 0 && (
+                resultado.pagamentos.semCorrespondenciaApp.filter(l => !ignorados.has(l.id)).length === 0 &&
+                resultado.pagamentos.semCorrespondenciaManual.filter(l => !ignorados.has(l.id)).length === 0 && (
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
