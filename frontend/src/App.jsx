@@ -156,49 +156,72 @@ export default function App() {
   };
 
   // Salvar dados no Supabase. Campos omitidos usam o valor atual do estado.
+  //
+  // Importante: supabase-js normalmente NÃO lança exceção quando uma consulta
+  // falha (ex: banco fora do ar) — ele resolve normalmente com um campo
+  // `error` preenchido. Por isso cada chamada abaixo é conferida na mão; sem
+  // isso, um salvamento podia falhar de forma completamente silenciosa e o
+  // usuário só descobria ao recarregar a página e ver tudo sumir.
   const salvarDados = async (dadosParciais = {}) => {
     const dados = {
       contas, contasAPagar, comissoes, movimentacoes, fechamentos, notas, categorias,
       ...dadosParciais
     };
+    const erros = [];
+    const verificar = (resultado, nomeTabela) => {
+      if (resultado?.error) erros.push(`${nomeTabela} (${resultado.error.message})`);
+    };
+
     try {
-      // Upsert contas (inserir ou atualizar)
-      await supabase.from('contas').upsert([{ id: 1, ...dados.contas }]);
+      const salvarTudo = (async () => {
+        verificar(await supabase.from('contas').upsert([{ id: 1, ...dados.contas }]), 'contas');
 
-      // Delete e reinsert contas a pagar (mais simples que update individual)
-      await supabase.from('contas_pagar').delete().neq('id', -1);
-      if (dados.contasAPagar.length > 0) {
-        await supabase.from('contas_pagar').insert(dados.contasAPagar);
-      }
+        verificar(await supabase.from('contas_pagar').delete().neq('id', -1), 'contas a pagar');
+        if (dados.contasAPagar.length > 0) {
+          verificar(await supabase.from('contas_pagar').insert(dados.contasAPagar), 'contas a pagar');
+        }
 
-      // Upsert comissões
-      await supabase.from('comissoes').upsert([{ id: 1, ...achatarComissoes(dados.comissoes) }]);
+        verificar(await supabase.from('comissoes').upsert([{ id: 1, ...achatarComissoes(dados.comissoes) }]), 'comissões');
 
-      // Delete e reinsert movimentações
-      await supabase.from('movimentacoes').delete().neq('id', -1);
-      if (dados.movimentacoes.length > 0) {
-        await supabase.from('movimentacoes').insert(dados.movimentacoes);
-      }
+        verificar(await supabase.from('movimentacoes').delete().neq('id', -1), 'movimentações');
+        if (dados.movimentacoes.length > 0) {
+          verificar(await supabase.from('movimentacoes').insert(dados.movimentacoes), 'movimentações');
+        }
 
-      // Delete e reinsert fechamentos mensais
-      await supabase.from('fechamentos').delete().neq('id', -1);
-      if (dados.fechamentos.length > 0) {
-        await supabase.from('fechamentos').insert(dados.fechamentos);
-      }
+        verificar(await supabase.from('fechamentos').delete().neq('id', -1), 'fechamentos');
+        if (dados.fechamentos.length > 0) {
+          verificar(await supabase.from('fechamentos').insert(dados.fechamentos), 'fechamentos');
+        }
 
-      // Delete e reinsert observações do dashboard
-      await supabase.from('notas_dashboard').delete().neq('id', -1);
-      if (dados.notas.length > 0) {
-        await supabase.from('notas_dashboard').insert(dados.notas);
-      }
+        verificar(await supabase.from('notas_dashboard').delete().neq('id', -1), 'observações');
+        if (dados.notas.length > 0) {
+          verificar(await supabase.from('notas_dashboard').insert(dados.notas), 'observações');
+        }
 
-      // Delete e reinsert classificações contábeis
-      await supabase.from('categorias_contabeis').delete().neq('id', -1);
-      if (dados.categorias.length > 0) {
-        await supabase.from('categorias_contabeis').insert(dados.categorias);
+        verificar(await supabase.from('categorias_contabeis').delete().neq('id', -1), 'classificações contábeis');
+        if (dados.categorias.length > 0) {
+          verificar(await supabase.from('categorias_contabeis').insert(dados.categorias), 'classificações contábeis');
+        }
+      })();
+
+      const semResposta = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('tempo esgotado ao salvar')), 20000)
+      );
+      await Promise.race([salvarTudo, semResposta]);
+
+      if (erros.length > 0) {
+        throw new Error(erros.join(', '));
       }
     } catch (erro) {
       console.error('Erro ao salvar:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar essa alteração no banco de dados!\n\n' +
+        'O que você acabou de fazer está aparecendo na tela, mas ainda NÃO foi salvo de verdade. ' +
+        'Se você recarregar a página ou fechar o navegador agora, essa alteração vai se perder.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Verifique sua internet e se o projeto do Supabase não está pausado (supabase.com → seu projeto → ' +
+        '"Restore project" se aparecer pausado). Depois repita essa alteração.'
+      );
     }
   };
 
