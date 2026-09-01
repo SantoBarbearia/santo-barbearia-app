@@ -691,6 +691,135 @@ body {
   cursor: not-allowed;
 }
 
+.categoria-select-duplo {
+  display: flex;
+  gap: 8px;
+}
+
+.categoria-select-duplo select {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.lista-categorias {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 15px;
+  margin-top: 20px;
+}
+
+.grupo-categoria {
+  background: var(--cor-fundo);
+  padding: 12px 15px;
+  border-radius: 6px;
+}
+
+.grupo-categoria h4 {
+  color: var(--cor-principal);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.item-categoria {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid #e6e6e6;
+  gap: 8px;
+}
+
+.item-categoria:last-child {
+  border-bottom: none;
+}
+
+.item-categoria .btn-excluir {
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.resumo-item.clicavel {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.resumo-item.clicavel:hover {
+  background: #ebebeb;
+}
+
+.dica-clicar {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.detalhe-lista {
+  margin-top: 15px;
+  border-top: 1px solid #eee;
+  padding-top: 15px;
+}
+
+.tabela-saldo-conta {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+.tabela-saldo-conta th {
+  text-align: left;
+  color: #999;
+  font-size: 11px;
+  text-transform: uppercase;
+  padding: 8px 12px;
+}
+
+.tabela-saldo-conta td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.tabela-saldo-conta .valor-entrada {
+  color: var(--cor-principal);
+  font-weight: 600;
+}
+
+.tabela-saldo-conta .valor-saida {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.badge-entrada,
+.badge-saida,
+.badge-transferencia {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-right: 6px;
+  text-transform: uppercase;
+}
+
+.badge-entrada {
+  background: #eaf7e6;
+  color: var(--cor-claro);
+}
+
+.badge-saida {
+  background: #fbeae7;
+  color: #c0392b;
+}
+
+.badge-transferencia {
+  background: #eef0f5;
+  color: #555;
+}
+
 .historico {
   margin-top: 30px;
 }
