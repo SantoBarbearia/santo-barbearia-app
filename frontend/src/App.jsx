@@ -266,6 +266,64 @@ export default function App() {
     return 'entrada';
   };
 
+  const isoParaBR = (iso) => {
+    if (!iso) return '';
+    const [ano, mes, dia] = iso.split('-');
+    return `${dia}/${mes}/${ano}`;
+  };
+
+  // Gera uma planilha Excel com o resumo, as movimentações e as contas a pagar
+  // do período/conta filtrados na Visão Geral, pra mandar pro contador.
+  const handleExportarRelatorio = async () => {
+    const XLSX = await import('xlsx');
+
+    const periodoLabel = (vgPeriodoInicio || vgPeriodoFim)
+      ? `${vgPeriodoInicio ? isoParaBR(vgPeriodoInicio) : 'início'} até ${vgPeriodoFim ? isoParaBR(vgPeriodoFim) : 'hoje'}`
+      : 'Todo o período';
+
+    const linhasResumo = [
+      ['Santo Barbearia - Relatório Financeiro'],
+      ['Período', periodoLabel],
+      ['Tipo de Conta', vgTipoConta === 'todas' ? 'Todas' : nomesContas[vgTipoConta]],
+      ['Gerado em', new Date().toLocaleString('pt-BR')],
+      [],
+      ['Total a Pagar (contas em aberto no período)', totalAPagarVG],
+      ['Quantidade de Contas Abertas', abertasVG.length],
+      [],
+      ['Saldo do Período por Conta'],
+      ['Conta', 'Entradas', 'Saídas', 'Saldo'],
+      ...saldoPorContaVG.map(l => [l.nome, l.entradas, l.saidas, l.saldo])
+    ];
+    const wsResumo = XLSX.utils.aoa_to_sheet(linhasResumo);
+
+    const linhasMov = [
+      ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor'],
+      ...movimentacoesVGporConta.map(m => [
+        m.data,
+        tipoVisualMovimentacao(m) === 'entrada' ? 'Entrada' : tipoVisualMovimentacao(m) === 'saida' ? 'Saída' : 'Transferência',
+        m.descricao,
+        m.categoria || '',
+        m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
+        m.valor
+      ])
+    ];
+    const wsMov = XLSX.utils.aoa_to_sheet(linhasMov);
+
+    const linhasContas = [
+      ['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com'],
+      ...contasAPagarVG.map(c => [c.descricao, c.categoria || '', c.vencimento, c.valor, c.status, c.conta ? (nomesContas[c.conta] || '') : ''])
+    ];
+    const wsContas = XLSX.utils.aoa_to_sheet(linhasContas);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo');
+    XLSX.utils.book_append_sheet(wb, wsMov, 'Movimentações');
+    XLSX.utils.book_append_sheet(wb, wsContas, 'Contas a Pagar');
+
+    const nomeArquivo = `relatorio-santo-barbearia-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, nomeArquivo);
+  };
+
   const proximoVencimento = (dataBR) => {
     const [dia, mes, ano] = dataBR.split('/').map(Number);
     const d = new Date(ano, mes - 1 + 1, dia);
@@ -564,7 +622,7 @@ export default function App() {
       descricao: `${linhaExtrato.descricao} (lançado da Conciliação)`,
       valor: linhaExtrato.valor,
       conta: 'sicredi',
-      categoria: ''
+      categoria: linhaExtrato.categoria || ''
     };
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
 
@@ -749,7 +807,11 @@ export default function App() {
                   >
                     Limpar filtro
                   </button>
+                  <button onClick={handleExportarRelatorio} className="btn-transferir">
+                    Exportar Relatório (Excel)
+                  </button>
                 </div>
+                <p className="upload-dica">Gera uma planilha com o resumo, as movimentações e as contas a pagar do período/conta filtrados acima — pronta pra mandar pro contador.</p>
               </div>
 
               <div className="card">
@@ -1156,7 +1218,12 @@ export default function App() {
           {/* Fica sempre montada (só escondida via CSS) pra não perder os arquivos
               carregados e o resultado da conciliação ao trocar de aba e voltar. */}
           <div style={{ display: activeTab === 'conciliacao' ? 'block' : 'none' }}>
-            <Conciliacao contasAPagar={contasAPagar} onLancarMovimentacao={handleLancarDoExtrato} />
+            <Conciliacao
+              contasAPagar={contasAPagar}
+              movimentacoes={movimentacoes}
+              categorias={categorias}
+              onLancarMovimentacao={handleLancarDoExtrato}
+            />
           </div>
 
           {activeTab === 'dashboard' && (
