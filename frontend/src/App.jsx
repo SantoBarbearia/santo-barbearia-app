@@ -86,6 +86,8 @@ export default function App() {
   const [fechamentos, setFechamentos] = useState([]);
   const [notas, setNotas] = useState([]);
   const [categorias, setCategorias] = useState([]);
+  const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
+  const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
   const [vgPeriodoInicio, setVgPeriodoInicio] = useState('');
   const [vgPeriodoFim, setVgPeriodoFim] = useState('');
@@ -508,6 +510,70 @@ export default function App() {
     salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
+  // Corrige ou apaga um Crédito/Débito Manual (inclusive os lançados pela
+  // Conciliação) — a única forma de arrumar um lançamento errado sem
+  // desmontar o saldo da conta manualmente.
+  const handleIniciarEdicaoMovimentacao = (mov) => {
+    setEditandoMovimentacaoId(mov.id);
+    setMovimentacaoEditando({
+      data: dataMovParaISO(mov.data),
+      descricao: mov.descricao,
+      valor: mov.valor,
+      categoria: mov.categoria || '',
+      conta: mov.conta
+    });
+  };
+
+  const handleCancelarEdicaoMovimentacao = () => {
+    setEditandoMovimentacaoId(null);
+    setMovimentacaoEditando({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
+  };
+
+  const handleSalvarEdicaoMovimentacao = (id) => {
+    const mov = movimentacoes.find(m => m.id === id);
+    if (!mov || !(parseFloat(movimentacaoEditando.valor) > 0) || !movimentacaoEditando.descricao.trim() || !movimentacaoEditando.data) return;
+
+    const valorNovo = parseFloat(movimentacaoEditando.valor);
+    const contaNova = movimentacaoEditando.conta;
+    const deltaAntigo = mov.tipo === 'Crédito Manual' ? mov.valor : -mov.valor;
+    const deltaNovo = mov.tipo === 'Crédito Manual' ? valorNovo : -valorNovo;
+
+    const novasContas = { ...contas };
+    novasContas[mov.conta] -= deltaAntigo;
+    novasContas[contaNova] = (novasContas[contaNova] ?? 0) + deltaNovo;
+
+    const [ano, mes, dia] = movimentacaoEditando.data.split('-');
+    const novasMovimentacoes = movimentacoes.map(m => m.id === id ? {
+      ...m,
+      data: `${dia}/${mes}/${ano}`,
+      descricao: movimentacaoEditando.descricao.trim(),
+      valor: valorNovo,
+      categoria: movimentacaoEditando.categoria,
+      conta: contaNova
+    } : m);
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    setEditandoMovimentacaoId(null);
+    setMovimentacaoEditando({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
+
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
+  const handleExcluirMovimentacaoManual = (id) => {
+    const mov = movimentacoes.find(m => m.id === id);
+    if (!mov || !window.confirm(`Excluir "${mov.descricao}"? O valor será revertido em ${nomesContas[mov.conta]}.`)) return;
+
+    const delta = mov.tipo === 'Crédito Manual' ? -mov.valor : mov.valor;
+    const novasContas = { ...contas, [mov.conta]: contas[mov.conta] + delta };
+    const novasMovimentacoes = movimentacoes.filter(m => m.id !== id);
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
   const handleAjustarSaldo = () => {
     const valor = parseFloat(ajuste.valor);
     if (!(valor > 0)) return;
@@ -890,6 +956,66 @@ export default function App() {
                     <tbody>
                       {movimentacoesVGporConta.slice(-8).reverse().map((mov) => {
                         const tipoVisual = tipoVisualMovimentacao(mov);
+                        const editavel = mov.tipo === 'Crédito Manual' || mov.tipo === 'Débito Manual';
+
+                        if (editandoMovimentacaoId === mov.id) {
+                          return (
+                            <tr key={mov.id}>
+                              <td colSpan={4}>
+                                <div className="form-transferencia" style={{ marginBottom: 10 }}>
+                                  <div className="input-group">
+                                    <label>Data</label>
+                                    <input
+                                      type="date"
+                                      value={movimentacaoEditando.data}
+                                      onChange={(e) => setMovimentacaoEditando({ ...movimentacaoEditando, data: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Descrição</label>
+                                    <input
+                                      type="text"
+                                      value={movimentacaoEditando.descricao}
+                                      onChange={(e) => setMovimentacaoEditando({ ...movimentacaoEditando, descricao: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Valor</label>
+                                    <input
+                                      type="number"
+                                      value={movimentacaoEditando.valor}
+                                      onChange={(e) => setMovimentacaoEditando({ ...movimentacaoEditando, valor: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Conta</label>
+                                    <select
+                                      value={movimentacaoEditando.conta}
+                                      onChange={(e) => setMovimentacaoEditando({ ...movimentacaoEditando, conta: e.target.value })}
+                                    >
+                                      {Object.entries(nomesContas).map(([chave, nome]) => (
+                                        <option key={chave} value={chave}>{nome}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Classificação Contábil</label>
+                                    <CategoriaSelect
+                                      categorias={categorias}
+                                      value={movimentacaoEditando.categoria}
+                                      onChange={(valor) => setMovimentacaoEditando({ ...movimentacaoEditando, categoria: valor })}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="acoes">
+                                  <button onClick={() => handleSalvarEdicaoMovimentacao(mov.id)} className="btn-salvar">Salvar</button>
+                                  <button onClick={handleCancelarEdicaoMovimentacao} className="btn-cancelar">Cancelar</button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }
+
                         return (
                           <tr key={mov.id}>
                             <td>{mov.data}</td>
@@ -900,6 +1026,14 @@ export default function App() {
                               {mov.descricao}{mov.categoria && <span className="badge-categoria"> {mov.categoria}</span>}
                             </td>
                             <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td>
+                              {editavel && (
+                                <div className="acoes">
+                                  <button onClick={() => handleIniciarEdicaoMovimentacao(mov)} className="btn-editar">Editar</button>
+                                  <button onClick={() => handleExcluirMovimentacaoManual(mov.id)} className="btn-excluir">Excluir</button>
+                                </div>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
