@@ -100,33 +100,34 @@ export default function App() {
   const carregarDados = async () => {
     try {
       setCarregando(true);
-      
-      // Carregar contas
-      const { data: contasData } = await supabase.from('contas').select('*').single();
+
+      // Todas as tabelas são carregadas em paralelo (e não uma depois da
+      // outra) — com 7 tabelas hoje, esperar cada uma terminar antes de
+      // começar a próxima deixava o carregamento visivelmente mais lento.
+      const [
+        { data: contasData },
+        { data: contasPagarData },
+        { data: comissoesData },
+        { data: movimentacoesData },
+        { data: fechamentosData },
+        { data: notasData },
+        { data: categoriasData }
+      ] = await Promise.all([
+        supabase.from('contas').select('*').single(),
+        supabase.from('contas_pagar').select('*'),
+        supabase.from('comissoes').select('*').single(),
+        supabase.from('movimentacoes').select('*'),
+        supabase.from('fechamentos').select('*'),
+        supabase.from('notas_dashboard').select('*'),
+        supabase.from('categorias_contabeis').select('*')
+      ]);
+
       if (contasData) setContas(contasData);
-      
-      // Carregar contas a pagar
-      const { data: contasPagarData } = await supabase.from('contas_pagar').select('*');
       if (contasPagarData) setContasAPagar(contasPagarData);
-      
-      // Carregar comissões
-      const { data: comissoesData } = await supabase.from('comissoes').select('*').single();
       if (comissoesData) setComissoes(desachatarComissoes(comissoesData));
-
-      // Carregar movimentações
-      const { data: movimentacoesData } = await supabase.from('movimentacoes').select('*');
       if (movimentacoesData) setMovimentacoes(movimentacoesData);
-
-      // Carregar fechamentos mensais
-      const { data: fechamentosData } = await supabase.from('fechamentos').select('*');
       if (fechamentosData) setFechamentos(fechamentosData);
-
-      // Carregar observações do dashboard
-      const { data: notasData } = await supabase.from('notas_dashboard').select('*');
       if (notasData) setNotas(notasData);
-
-      // Carregar classificações contábeis
-      const { data: categoriasData } = await supabase.from('categorias_contabeis').select('*');
       if (categoriasData) setCategorias(categoriasData);
 
     } catch (erro) {
