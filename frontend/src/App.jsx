@@ -132,7 +132,17 @@ export default function App() {
         { data: categoriasData }
       ] = await Promise.race([buscarDados, semResposta]);
 
-      if (contasData) setContas(contasData);
+      // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
+      // que não podem entrar no estado (os cartões de saldo renderizam todas as
+      // chaves de `contas`, e uma data ali quebra a soma do Total Geral).
+      if (contasData) {
+        setContas({
+          caixa: contasData.caixa,
+          cofre: contasData.cofre,
+          reserva: contasData.reserva,
+          sicredi: contasData.sicredi
+        });
+      }
       if (contasPagarData) setContasAPagar(contasPagarData);
       if (comissoesData) setComissoes(desachatarComissoes(comissoesData));
       if (movimentacoesData) setMovimentacoes(movimentacoesData);
