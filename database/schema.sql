@@ -105,11 +105,26 @@ CREATE TABLE IF NOT EXISTS categorias_contabeis (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Habilitar RLS (Row Level Security) - Modo teste (desabilitado por enquanto)
--- ALTER TABLE contas ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE contas_pagar ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE comissoes ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE movimentacoes ENABLE ROW LEVEL SECURITY;
+-- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
+-- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
+-- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
+-- falha em silêncio (erro de rede no navegador). Como o app não tem login
+-- (uso interno da barbearia), a política libera acesso total.
+ALTER TABLE contas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contas_pagar ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comissoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE movimentacoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fechamentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notas_dashboard ENABLE ROW LEVEL SECURITY;
+ALTER TABLE categorias_contabeis ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON comissoes FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON movimentacoes FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON fechamentos FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON notas_dashboard FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON categorias_contabeis FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
 INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 
