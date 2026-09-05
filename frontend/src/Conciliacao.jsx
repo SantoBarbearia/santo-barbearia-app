@@ -177,6 +177,23 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const maquininha = fontes.maquininha.linhas;
     const vendas = fontes.vendas.linhas;
 
+    // O extrato define o período sendo conciliado — um lançamento (manual ou
+    // conta paga) de outro mês não pode aparecer como "divergência" só porque
+    // não está num extrato que nem é do período dele. Damos uma margem de
+    // alguns dias pra cobrir compensação bancária perto da virada do mês.
+    const MARGEM_DIAS = 5;
+    const datasExtrato = fontes.extrato.linhas.map((l) => l.data).filter(Boolean).sort();
+    const periodoInicioExtrato = datasExtrato.length > 0
+      ? new Date(new Date(datasExtrato[0]).getTime() - MARGEM_DIAS * 86400000).toISOString().slice(0, 10)
+      : null;
+    const periodoFimExtrato = datasExtrato.length > 0
+      ? new Date(new Date(datasExtrato[datasExtrato.length - 1]).getTime() + MARGEM_DIAS * 86400000).toISOString().slice(0, 10)
+      : null;
+    const dentroDoPeriodoDoExtrato = (dataISO) => {
+      if (!periodoInicioExtrato || !periodoFimExtrato || !dataISO) return true;
+      return dataISO >= periodoInicioExtrato && dataISO <= periodoFimExtrato;
+    };
+
     const pagamentosApp = contasAPagar
       .filter((c) => c.status === 'Pago')
       .map((c) => {
@@ -188,20 +205,22 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           valor: c.valor,
           tipo: 'saida'
         };
-      });
+      })
+      .filter((c) => dentroDoPeriodoDoExtrato(c.data));
 
     // Lançamentos manuais já feitos direto no app (aba Visão Geral > Adicionar
     // Crédito/Débito, inclusive os que vieram de uma conciliação anterior) —
     // se já batem com uma linha do extrato, não precisam ser lançados de novo.
+    // Só entram aqui os do período do extrato carregado (ver dentroDoPeriodoDoExtrato).
     const lancamentosManuaisEntrada = (movimentacoes || [])
       .filter((m) => m.tipo === 'Crédito Manual')
       .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'entrada' }))
-      .filter((m) => m.data);
+      .filter((m) => m.data && dentroDoPeriodoDoExtrato(m.data));
 
     const lancamentosManuaisSaida = (movimentacoes || [])
       .filter((m) => m.tipo === 'Débito Manual')
       .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'saida' }))
-      .filter((m) => m.data);
+      .filter((m) => m.data && dentroDoPeriodoDoExtrato(m.data));
 
     const passo1 = conciliar(entradasExtrato, sistemaPix);
     const passo2 = conciliar(passo1.semParA, maquininha);
