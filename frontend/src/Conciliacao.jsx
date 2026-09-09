@@ -33,6 +33,10 @@ const LABELS_FONTE = {
   vendas: 'Relatório de Vendas da Maquininha (opcional)'
 };
 
+// A maioria dos recebimentos do extrato é dessa classificação — já vem
+// pré-selecionada nas entradas sem correspondência, mas continua editável.
+const CATEGORIA_PADRAO_RECEBIMENTO = 'Receitas > Produtos e Serviços';
+
 function formatarMoeda(valor) {
   return `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -265,7 +269,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const lancarMovimentacao = (linha) => {
-    onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] || '' });
+    const categoriaPadrao = linha.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '';
+    onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
     marcarIgnorado(linha.id);
   };
 
@@ -399,7 +404,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <>
                   <CategoriaSelect
                     categorias={categorias || []}
-                    value={categoriaPorLinha[l.id] || ''}
+                    value={categoriaPorLinha[l.id] ?? (l.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '')}
                     onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
                   />
                   <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
