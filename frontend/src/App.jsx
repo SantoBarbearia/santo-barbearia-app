@@ -807,6 +807,34 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
+  // Divide uma linha do extrato (ex: uma compra no mercado que mistura
+  // material de limpeza, bebidas e insumos de lanche no mesmo débito) em
+  // várias movimentações — o valor total lançado na Conta Corrente continua
+  // igual ao da linha do banco, só a classificação contábil é repartida.
+  const handleDividirLancamento = (linhaExtrato, partes) => {
+    const [ano, mes, dia] = linhaExtrato.data.split('-');
+    const dataBR = `${dia}/${mes}/${ano}`;
+    const totalPartes = partes.reduce((soma, p) => soma + p.valor, 0);
+    const delta = linhaExtrato.tipo === 'entrada' ? totalPartes : -totalPartes;
+    const novasContas = { ...contas, sicredi: contas.sicredi + delta };
+
+    const baseId = Date.now();
+    const novasMovs = partes.map((parte, i) => ({
+      id: baseId + i,
+      data: dataBR,
+      tipo: linhaExtrato.tipo === 'entrada' ? 'Crédito Manual' : 'Débito Manual',
+      descricao: `${capitalizarTexto(linhaExtrato.descricao)} (parte ${i + 1}/${partes.length} - lançado da Conciliação)`,
+      valor: parte.valor,
+      conta: 'sicredi',
+      categoria: parte.categoria || ''
+    }));
+    const novasMovimentacoes = [...movimentacoes, ...novasMovs];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
   // Lança no Caixa um recebimento em dinheiro do Relatório do Sistema — não
   // passa pelo banco nem pela maquininha, então não tem com o que conciliar,
   // só precisa entrar no saldo do Caixa igual um Crédito Manual normal.
@@ -1513,6 +1541,7 @@ export default function App() {
               movimentacoes={movimentacoes}
               categorias={categorias}
               onLancarMovimentacao={handleLancarDoExtrato}
+              onDividirLancamento={handleDividirLancamento}
               onLancarCaixa={handleLancarCaixa}
               onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
             />

@@ -47,7 +47,7 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onDividirLancamento }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -59,6 +59,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [resultado, setResultado] = useState(null);
   const [ignorados, setIgnorados] = useState(new Set());
   const [categoriaPorLinha, setCategoriaPorLinha] = useState({});
+  const [dividindo, setDividindo] = useState(null);
+  const [partesDivisao, setPartesDivisao] = useState([]);
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
 
   const atualizarFonte = (chave, patch) => {
@@ -287,6 +289,42 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     marcarIgnorado(linha.id);
   };
 
+  // Uma linha do extrato às vezes mistura mais de uma classificação (ex: uma
+  // compra no mercado com material de limpeza, bebidas e insumos de lanche
+  // no mesmo débito) — divide o valor total em várias partes, cada uma com
+  // sua própria categoria, sem perder o valor exato que caiu no banco.
+  const iniciarDivisao = (linha) => {
+    setDividindo(linha.id);
+    setPartesDivisao([{ valor: '', categoria: '' }, { valor: '', categoria: '' }]);
+  };
+
+  const cancelarDivisao = () => {
+    setDividindo(null);
+    setPartesDivisao([]);
+  };
+
+  const atualizarParte = (indice, campo, valor) => {
+    setPartesDivisao((partes) => partes.map((p, i) => (i === indice ? { ...p, [campo]: valor } : p)));
+  };
+
+  const adicionarParte = () => {
+    setPartesDivisao((partes) => [...partes, { valor: '', categoria: '' }]);
+  };
+
+  const removerParte = (indice) => {
+    setPartesDivisao((partes) => partes.filter((_, i) => i !== indice));
+  };
+
+  const confirmarDivisao = (linha) => {
+    const partes = partesDivisao.map((p) => ({ valor: parseFloat(p.valor) || 0, categoria: p.categoria }));
+    const somaCentavos = Math.round(partes.reduce((s, p) => s + p.valor, 0) * 100);
+    const totalCentavos = Math.round(linha.valor * 100);
+    if (somaCentavos !== totalCentavos || partes.some((p) => !(p.valor > 0) || !p.categoria)) return;
+    onDividirLancamento(linha, partes);
+    marcarIgnorado(linha.id);
+    cancelarDivisao();
+  };
+
   const temAlgumaFonte = Object.values(fontes).some((f) => f.linhas.length > 0);
 
   const renderUpload = (chave) => {
@@ -421,10 +459,67 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                     onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
                   />
                   <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
+                  <button onClick={() => (dividindo === l.id ? cancelarDivisao() : iniciarDivisao(l))} className="btn-editar">
+                    {dividindo === l.id ? 'Cancelar Divisão' : 'Dividir em Categorias'}
+                  </button>
                 </>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
+            {dividindo === l.id && (() => {
+              const somaCentavos = Math.round(partesDivisao.reduce((s, p) => s + (parseFloat(p.valor) || 0), 0) * 100);
+              const totalCentavos = Math.round(l.valor * 100);
+              const bate = somaCentavos === totalCentavos;
+              return (
+                <div className="mapeamento" style={{ width: '100%' }}>
+                  <p className="nota-formato">
+                    Divida os {formatarMoeda(l.valor)} de "{l.descricao}" entre as classificações — a soma das partes precisa bater exatamente com o valor total.
+                  </p>
+                  {partesDivisao.map((parte, i) => (
+                    <div key={i} className="form-transferencia" style={{ marginBottom: 8 }}>
+                      <div className="input-group">
+                        <label>Valor</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={parte.valor}
+                          onChange={(e) => atualizarParte(i, 'valor', e.target.value)}
+                          placeholder="0,00"
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label>Classificação</label>
+                        <CategoriaSelect
+                          categorias={categorias || []}
+                          value={parte.categoria}
+                          onChange={(valor) => atualizarParte(i, 'categoria', valor)}
+                        />
+                      </div>
+                      {partesDivisao.length > 1 && (
+                        <button onClick={() => removerParte(i)} className="btn-excluir">Remover</button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="acoes" style={{ marginBottom: 8 }}>
+                    <button onClick={adicionarParte} className="btn-editar">+ Adicionar parte</button>
+                  </div>
+                  <p className="venc">
+                    Soma das partes: {formatarMoeda(partesDivisao.reduce((s, p) => s + (parseFloat(p.valor) || 0), 0))} de {formatarMoeda(l.valor)}
+                    {!bate && <span style={{ color: '#c0392b' }}> — ainda não bate</span>}
+                  </p>
+                  <div className="acoes" style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => confirmarDivisao(l)}
+                      disabled={!bate || partesDivisao.some((p) => !(parseFloat(p.valor) > 0) || !p.categoria)}
+                      className="btn-salvar"
+                    >
+                      Confirmar Divisão
+                    </button>
+                    <button onClick={cancelarDivisao} className="btn-cancelar">Cancelar</button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ))}
       </div>
