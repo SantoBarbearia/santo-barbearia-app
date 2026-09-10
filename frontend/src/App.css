@@ -356,6 +356,14 @@ body {
   border-left: 4px solid #c0392b;
 }
 
+.divergencia-entrada {
+  border-left-color: #27ae60;
+}
+
+.divergencia-saida {
+  border-left-color: #c0392b;
+}
+
 .origem-tag {
   color: #999;
   font-weight: normal;

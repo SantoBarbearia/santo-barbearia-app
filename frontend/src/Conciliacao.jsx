@@ -47,7 +47,7 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onCriarContaTaxaMaquininha }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -59,6 +59,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [resultado, setResultado] = useState(null);
   const [ignorados, setIgnorados] = useState(new Set());
   const [categoriaPorLinha, setCategoriaPorLinha] = useState({});
+  const [taxaJaLancada, setTaxaJaLancada] = useState(false);
 
   const atualizarFonte = (chave, patch) => {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
@@ -262,6 +263,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       taxaMaquininha
     });
     setIgnorados(new Set());
+    setTaxaJaLancada(false);
   };
 
   const marcarIgnorado = (id) => {
@@ -393,7 +395,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       <div>
         <p className="venc" style={{ marginBottom: 8 }}>{titulo}</p>
         {visiveis.map((l) => (
-          <div key={l.id} className="item-conta divergencia-item">
+          <div key={l.id} className={`item-conta divergencia-item ${l.tipo === 'saida' ? 'divergencia-saida' : 'divergencia-entrada'}`}>
             <div className="info-conta">
               <p className="desc">{l.descricao} <span className="origem-tag">({origemLabel})</span></p>
               <p className="venc">{formatarDataBR(l.data)}</p>
@@ -522,8 +524,21 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <h3>Taxas da Maquininha</h3>
               <p className="nota-formato">
                 A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
-                Pra bater com o saldo do banco, considere lançar esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
+                Pra bater com o saldo do banco, lance esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
               </p>
+              {taxaJaLancada ? (
+                <p className="nota-formato">✓ Conta a pagar criada — vai aparecer em "Contas em Aberto", pronta pra você pagar de qualquer conta.</p>
+              ) : (
+                <button
+                  onClick={() => {
+                    onCriarContaTaxaMaquininha(resultado.taxaMaquininha);
+                    setTaxaJaLancada(true);
+                  }}
+                  className="btn-transferir"
+                >
+                  Criar Conta a Pagar com esse valor
+                </button>
+              )}
             </div>
           )}
         </>
