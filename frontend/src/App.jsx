@@ -4,6 +4,7 @@ import Conciliacao from './Conciliacao';
 import Dashboard from './Dashboard';
 import CategoriaSelect from './CategoriaSelect';
 import GerenciarCategorias from './GerenciarCategorias';
+import { capitalizarTexto } from './utils/texto';
 import './App.css';
 
 // Configuração Supabase
@@ -455,7 +456,7 @@ export default function App() {
     const conta = {
       id,
       data: new Date().toLocaleDateString('pt-BR'),
-      descricao: novaConta.descricao.trim(),
+      descricao: capitalizarTexto(novaConta.descricao.trim()),
       valor: parseFloat(novaConta.valor),
       vencimento: `${dia}/${mes}/${ano}`,
       status: 'Aberto',
@@ -498,7 +499,7 @@ export default function App() {
     const recorrente = !!contaEditando.recorrente;
     const novasContasAPagar = contasAPagar.map(c => c.id === id ? {
       ...c,
-      descricao: contaEditando.descricao.trim(),
+      descricao: capitalizarTexto(contaEditando.descricao.trim()),
       valor: parseFloat(contaEditando.valor),
       vencimento: `${dia}/${mes}/${ano}`,
       categoria: contaEditando.categoria,
@@ -593,7 +594,7 @@ export default function App() {
     const novasMovimentacoes = movimentacoes.map(m => m.id === id ? {
       ...m,
       data: `${dia}/${mes}/${ano}`,
-      descricao: movimentacaoEditando.descricao.trim(),
+      descricao: capitalizarTexto(movimentacaoEditando.descricao.trim()),
       valor: valorNovo,
       categoria: movimentacaoEditando.categoria,
       conta: contaNova
@@ -632,7 +633,7 @@ export default function App() {
       id: Date.now(),
       data: new Date().toLocaleDateString('pt-BR'),
       tipo: ajuste.tipo === 'credito' ? 'Crédito Manual' : 'Débito Manual',
-      descricao: ajuste.descricao.trim() || (ajuste.tipo === 'credito' ? 'Crédito manual' : 'Débito manual'),
+      descricao: capitalizarTexto(ajuste.descricao.trim()) || (ajuste.tipo === 'credito' ? 'Crédito manual' : 'Débito manual'),
       valor,
       conta: ajuste.conta,
       categoria: ajuste.categoria
@@ -693,7 +694,7 @@ export default function App() {
 
   const handleAdicionarNota = (texto) => {
     if (!texto.trim()) return;
-    const novaNota = { id: Date.now(), data: new Date().toLocaleDateString('pt-BR'), texto: texto.trim() };
+    const novaNota = { id: Date.now(), data: new Date().toLocaleDateString('pt-BR'), texto: capitalizarTexto(texto.trim()) };
     const novasNotas = [...notas, novaNota];
     setNotas(novasNotas);
     salvarDados({ notas: novasNotas });
@@ -707,9 +708,11 @@ export default function App() {
 
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
-    const jaExiste = categorias.some(c => c.nivel1 === nivel1.trim() && c.nivel2 === nivel2.trim());
+    const nivel1Formatado = capitalizarTexto(nivel1.trim());
+    const nivel2Formatado = capitalizarTexto(nivel2.trim());
+    const jaExiste = categorias.some(c => c.nivel1 === nivel1Formatado && c.nivel2 === nivel2Formatado);
     if (jaExiste) return;
-    const novaCategoria = { id: Date.now(), nivel1: nivel1.trim(), nivel2: nivel2.trim() };
+    const novaCategoria = { id: Date.now(), nivel1: nivel1Formatado, nivel2: nivel2Formatado };
     const novasCategorias = [...categorias, novaCategoria];
     setCategorias(novasCategorias);
     salvarDados({ categorias: novasCategorias });
@@ -733,7 +736,7 @@ export default function App() {
       id: Date.now(),
       data: `${dia}/${mes}/${ano}`,
       tipo: linhaExtrato.tipo === 'entrada' ? 'Crédito Manual' : 'Débito Manual',
-      descricao: `${linhaExtrato.descricao} (lançado da Conciliação)`,
+      descricao: `${capitalizarTexto(linhaExtrato.descricao)} (lançado da Conciliação)`,
       valor: linhaExtrato.valor,
       conta: 'sicredi',
       categoria: linhaExtrato.categoria || ''
@@ -743,6 +746,28 @@ export default function App() {
     setContas(novasContas);
     setMovimentacoes(novasMovimentacoes);
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
+  // Cria a Conta a Pagar da taxa da maquininha direto a partir do resultado
+  // da Conciliação, sem precisar digitar nada — só falta pagar de alguma conta.
+  const handleCriarContaTaxaMaquininha = (valor) => {
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const novaConta = {
+      id: Date.now(),
+      data: hoje,
+      descricao: 'Taxas da Maquininha',
+      valor: Math.round(valor * 100) / 100,
+      vencimento: hoje,
+      status: 'Aberto',
+      conta: '',
+      categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)',
+      recorrente: false,
+      grupoRecorrente: null,
+      repeticoesRestantes: 0
+    };
+    const novasContasAPagar = [...contasAPagar, novaConta];
+    setContasAPagar(novasContasAPagar);
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
 
   const handleTransferencia = () => {
@@ -1405,6 +1430,7 @@ export default function App() {
               movimentacoes={movimentacoes}
               categorias={categorias}
               onLancarMovimentacao={handleLancarDoExtrato}
+              onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
             />
           </div>
 
