@@ -301,6 +301,25 @@ export default function App() {
     return m.conta === vgTipoConta;
   });
 
+  // Saldo da conta exatamente antes do período selecionado — "rebobina" o saldo
+  // atual subtraindo o efeito de tudo que aconteceu a partir do início do
+  // período (inclusive coisas com data depois do fim do período, se houver).
+  const saldoAnteriorConta = (chave) => {
+    let saldo = contas[chave] ?? 0;
+    movimentacoes.forEach(m => {
+      const dataISO = dataMovParaISO(m.data);
+      if (!dataISO || dataISO < vgPeriodoInicio) return;
+      if (m.tipo === 'Transferência') {
+        if (m.de === chave) saldo += m.valor;
+        if (m.para === chave) saldo -= m.valor;
+      } else if (m.conta === chave) {
+        if (m.tipo === 'Despesa Paga' || m.tipo === 'Débito Manual') saldo += m.valor;
+        else saldo -= m.valor;
+      }
+    });
+    return saldo;
+  };
+
   // Saldo do período (entradas, saídas e saldo) por tipo de conta
   const contasParaSaldoVG = vgTipoConta === 'todas' ? Object.keys(nomesContas) : [vgTipoConta];
   const saldoPorContaVG = contasParaSaldoVG.map(chave => {
@@ -318,7 +337,8 @@ export default function App() {
         }
       }
     });
-    return { chave, nome: nomesContas[chave], entradas, saidas, saldo: entradas - saidas };
+    const saldoAnterior = saldoAnteriorConta(chave);
+    return { chave, nome: nomesContas[chave], saldoAnterior, entradas, saidas, saldo: entradas - saidas, saldoFinal: saldoAnterior + (entradas - saidas) };
   });
 
   // Classifica uma movimentação como entrada/saída/transferência pra exibição
@@ -339,6 +359,18 @@ export default function App() {
   const handleExportarRelatorio = async () => {
     const XLSX = await import('xlsx');
 
+    // Formato "contábil" do Excel (símbolo de moeda alinhado à esquerda da
+    // célula, valor à direita, negativos com sinal de menos antes do R$).
+    const FORMATO_CONTABIL = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
+    const aplicarFormatoContabil = (ws, colunas, primeiraLinha, ultimaLinha) => {
+      for (let linha = primeiraLinha; linha <= ultimaLinha; linha++) {
+        colunas.forEach((coluna) => {
+          const ref = `${coluna}${linha}`;
+          if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = FORMATO_CONTABIL;
+        });
+      }
+    };
+
     const periodoLabel = (vgPeriodoInicio || vgPeriodoFim)
       ? `${vgPeriodoInicio ? isoParaBR(vgPeriodoInicio) : 'início'} até ${vgPeriodoFim ? isoParaBR(vgPeriodoFim) : 'hoje'}`
       : 'Todo o período';
@@ -353,29 +385,45 @@ export default function App() {
       ['Quantidade de Contas Abertas', abertasVG.length],
       [],
       ['Saldo do Período por Conta'],
-      ['Conta', 'Entradas', 'Saídas', 'Saldo'],
-      ...saldoPorContaVG.map(l => [l.nome, l.entradas, l.saidas, l.saldo])
+      ['Conta', 'Saldo Anterior', 'Entradas', 'Saídas', 'Saldo do Período', 'Saldo Final'],
+      ...saldoPorContaVG.map(l => [l.nome, l.saldoAnterior, l.entradas, -l.saidas, l.saldo, l.saldoFinal]),
+      ['Total', saldoPorContaVG.reduce((s, l) => s + l.saldoAnterior, 0), saldoPorContaVG.reduce((s, l) => s + l.entradas, 0), -saldoPorContaVG.reduce((s, l) => s + l.saidas, 0), saldoPorContaVG.reduce((s, l) => s + l.saldo, 0), saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0)]
     ];
     const wsResumo = XLSX.utils.aoa_to_sheet(linhasResumo);
+    aplicarFormatoContabil(wsResumo, ['B'], 6, 6);
+    aplicarFormatoContabil(wsResumo, ['B', 'C', 'D', 'E', 'F'], 11, 11 + saldoPorContaVG.length);
+
+    const movimentacoesOrdenadas = [...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id);
+    const linhaSaldoAnterior = (l) => ['', '', '', 'Saldo Anterior', l.nome, l.saldoAnterior];
+    const linhaSaldoFinal = (l) => ['', '', '', 'Saldo Final', l.nome, l.saldoFinal];
 
     const linhasMov = [
       ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor'],
-      ...movimentacoesVGporConta.map(m => [
-        formatarDataMovParaExibir(m.data),
-        tipoVisualMovimentacao(m) === 'entrada' ? 'Entrada' : tipoVisualMovimentacao(m) === 'saida' ? 'Saída' : 'Transferência',
-        m.descricao,
-        m.categoria || '',
-        m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
-        m.valor
-      ])
+      ...saldoPorContaVG.map(linhaSaldoAnterior),
+      ...movimentacoesOrdenadas.map(m => {
+        const tipoVisual = tipoVisualMovimentacao(m);
+        const valorComSinal = tipoVisual === 'saida' ? -m.valor : m.valor;
+        return [
+          formatarDataMovParaExibir(m.data),
+          tipoVisual === 'entrada' ? 'Entrada' : tipoVisual === 'saida' ? 'Saída' : 'Transferência',
+          m.descricao,
+          m.categoria || '',
+          m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
+          valorComSinal
+        ];
+      }),
+      ...saldoPorContaVG.map(linhaSaldoFinal),
+      ['', '', '', '', 'Total Geral', saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0)]
     ];
     const wsMov = XLSX.utils.aoa_to_sheet(linhasMov);
+    aplicarFormatoContabil(wsMov, ['F'], 2, linhasMov.length);
 
     const linhasContas = [
       ['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com'],
       ...contasAPagarVG.map(c => [c.descricao, c.categoria || '', c.vencimento, c.valor, c.status, c.conta ? (nomesContas[c.conta] || '') : ''])
     ];
     const wsContas = XLSX.utils.aoa_to_sheet(linhasContas);
+    aplicarFormatoContabil(wsContas, ['D'], 2, linhasContas.length);
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo');
