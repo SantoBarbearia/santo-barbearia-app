@@ -265,6 +265,17 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // só tem o desconto de MDR, então serve de estimativa quando só ele foi carregado.
     const taxaMaquininha = fontes.maquininha.taxaMaquininha ?? fontes.vendas.taxaMaquininha ?? null;
 
+    // Marca cada comanda do faturamento bruto com o que já foi confirmado: Pix
+    // bate direto com uma linha do extrato (passo1); Cartão só dá pra conferir
+    // em lote com o Relatório de Vendas da maquininha (passo4), não linha a
+    // linha com o banco — mesmo assim já é um sinal melhor que nada.
+    const pixConfirmadoIds = new Set(passo1.pares.map((p) => p.b.id));
+    const cartaoConfirmadoIds = new Set(passo4.pares.map((p) => p.b.id));
+    const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
+      ...l,
+      confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)
+    }));
+
     setResultado({
       recebimentos: {
         conciliadoSistema: passo1.pares.length,
@@ -289,7 +300,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       },
       taxaMaquininha,
       recebimentosDinheiro,
-      faturamentoBrutoSistema
+      faturamentoBrutoSistema: faturamentoBrutoComStatus
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -335,8 +346,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     marcarIgnorado(linha.id);
   };
 
-  const lancarTodoFaturamentoBruto = () => {
-    const visiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+  const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
+    const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+    const visiveis = apenasConfirmadas ? todasVisiveis.filter((l) => l.confirmadoNoBanco) : todasVisiveis;
     if (visiveis.length === 0) return;
     const linhasComCategoria = visiveis.map((l) => ({
       ...l,
@@ -592,16 +604,24 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     if (visiveis.length === 0) return null;
     const totalBruto = visiveis.reduce((s, l) => s + l.valorBruto, 0);
     const totalTaxa = visiveis.reduce((s, l) => s + (l.taxa || 0), 0);
+    const confirmadas = visiveis.filter((l) => l.confirmadoNoBanco).length;
     return (
       <div className="card">
         <h3>Faturamento Bruto do Sistema</h3>
         <p className="nota-formato">
           Essas comandas do Sistema (Pix e Cartão) ainda não viraram Receita no app — mesmo as que já conciliaram com o extrato. Cada uma lança o valor BRUTO (o que o cliente pagou) como Receita e, quando teve taxa de maquininha, a taxa entra separada como Despesa — o efeito no saldo da Conta Corrente é igual ao valor líquido que realmente caiu no banco.
         </p>
+        <p className="nota-formato">
+          <strong>✓ Confirmado</strong> = essa comanda já bateu com o extrato (Pix) ou com o Relatório de Vendas da maquininha (Cartão). <strong>⏳ Pendente</strong> = o Cash Barber diz que foi pago, mas ainda não achamos correspondência no banco/maquininha nesse período — pode ser só atraso de compensação, vale conferir antes de lançar.
+        </p>
         <div className="resumo-grid">
           <div className="resumo-item">
             <p>Comandas</p>
             <p className="valor-resumo">{visiveis.length}</p>
+          </div>
+          <div className="resumo-item">
+            <p>Confirmadas / Pendentes</p>
+            <p className="valor-resumo">{confirmadas} / {visiveis.length - confirmadas}</p>
           </div>
           <div className="resumo-item">
             <p>Total Bruto</p>
@@ -613,12 +633,22 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           </div>
         </div>
         <div className="acoes" style={{ margin: '10px 0' }}>
-          <button onClick={lancarTodoFaturamentoBruto} className="btn-transferir">Lançar Faturamento de Todas as Comandas</button>
+          <button onClick={() => lancarTodoFaturamentoBruto(false)} className="btn-transferir">Lançar Faturamento de Todas as Comandas</button>
+          {confirmadas > 0 && confirmadas < visiveis.length && (
+            <button onClick={() => lancarTodoFaturamentoBruto(true)} className="btn-editar">Lançar Só as Confirmadas ({confirmadas})</button>
+          )}
         </div>
         {visiveis.map((l) => (
           <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
             <div className="info-conta">
-              <p className="desc">{l.descricao} <span className="origem-tag">(Sistema)</span></p>
+              <p className="desc">
+                {l.descricao} <span className="origem-tag">(Sistema)</span>{' '}
+                {l.confirmadoNoBanco ? (
+                  <span className="badge-categoria" style={{ color: '#27ae60' }}>✓ Confirmado {l.viaPix ? 'no extrato' : 'na maquininha'}</span>
+                ) : (
+                  <span className="badge-categoria" style={{ color: '#c0862e' }}>⏳ Pendente {l.viaPix ? 'no extrato' : 'na maquininha'}</span>
+                )}
+              </p>
               <p className="venc">
                 {formatarDataBR(l.data)}
                 {l.taxa > 0 && ` — taxa ${formatarMoeda(l.taxa)} (R$ ${l.valorLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} líquido no banco)`}
