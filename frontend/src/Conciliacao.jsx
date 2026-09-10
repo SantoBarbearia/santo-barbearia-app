@@ -76,6 +76,27 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [partesDivisao, setPartesDivisao] = useState([]);
   const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
   const [casamentoManual, setCasamentoManual] = useState(null);
+  const [secoesRecolhidas, setSecoesRecolhidas] = useState(new Set());
+
+  const alternarSecao = (chave) => {
+    setSecoesRecolhidas((s) => {
+      const novo = new Set(s);
+      if (novo.has(chave)) novo.delete(chave); else novo.add(chave);
+      return novo;
+    });
+  };
+
+  // Cabeçalho padrão dos cards de resultado, com botão de recolher/expandir
+  // pra não precisar rolar tanto entre uma seção e outra.
+  const renderTituloSecao = (titulo, chave) => {
+    const aberta = !secoesRecolhidas.has(chave);
+    return (
+      <div className="acoes" style={{ justifyContent: 'space-between', marginBottom: aberta ? 10 : 0 }}>
+        <h3 style={{ margin: 0 }}>{titulo}</h3>
+        <button onClick={() => alternarSecao(chave)} className="btn-editar">{aberta ? '▲ Recolher' : '▼ Expandir'}</button>
+      </div>
+    );
+  };
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
 
   const atualizarFonte = (chave, patch) => {
@@ -273,6 +294,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // linha com o banco — mesmo assim já é um sinal melhor que nada.
     const pixConfirmadoIds = new Set(passo1.pares.map((p) => p.b.id));
     const cartaoConfirmadoIds = new Set(passo4.pares.map((p) => p.b.id));
+    // Guarda qual linha do extrato foi casada com qual comanda via Pix — se
+    // a Fernanda precisar "roubar" essa linha pra outra comanda (porque o
+    // casamento automático por valor+data pegou a comanda errada, comum
+    // quando duas comandas do mesmo valor caem perto uma da outra), a gente
+    // sabe qual comanda desconfirmar.
+    const paresPixExtratoSistema = passo1.pares.map((p) => ({ extratoId: p.a.id, sistemaId: p.b.id }));
     const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
       ...l,
       confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)
@@ -302,7 +329,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       },
       taxaMaquininha,
       recebimentosDinheiro,
-      faturamentoBrutoSistema: faturamentoBrutoComStatus
+      faturamentoBrutoSistema: faturamentoBrutoComStatus,
+      paresPixExtratoSistema
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -433,17 +461,32 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       // A comanda em questão é confirmada; os lançamentos do extrato
       // selecionados somem da lista de pendências (o dinheiro deles já está
       // explicado pela comanda, que vai virar Receita no Faturamento Bruto).
+      // Se algum dos selecionados já tinha sido casado automaticamente com
+      // OUTRA comanda (mesmo valor, data próxima — comum com R$52,00, por
+      // exemplo), essa outra comanda volta a ficar pendente, porque a linha
+      // do extrato dela na verdade era essa que a Fernanda escolheu agora.
+      const paresPix = resultado.paresPixExtratoSistema || [];
+      const sistemaIdsParaDesconfirmar = new Set(
+        [...casamentoManual.selecionados]
+          .map((extratoId) => paresPix.find((p) => p.extratoId === extratoId)?.sistemaId)
+          .filter(Boolean)
+      );
       setResultado((r) => ({
         ...r,
-        faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((x) =>
-          x.id === casamentoManual.id ? { ...x, confirmadoNoBanco: true } : x
-        )
+        faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((x) => {
+          if (x.id === casamentoManual.id) return { ...x, confirmadoNoBanco: true };
+          if (sistemaIdsParaDesconfirmar.has(x.id)) return { ...x, confirmadoNoBanco: false };
+          return x;
+        })
       }));
       setIgnorados((s) => {
         const novo = new Set(s);
         casamentoManual.selecionados.forEach((id) => novo.add(id));
         return novo;
       });
+      if (sistemaIdsParaDesconfirmar.size > 0) {
+        alert('Atenção: uma ou mais linhas selecionadas já estavam casadas automaticamente com outra comanda — ela(s) voltaram a ficar "Pendente" pra você conferir com o que realmente bate.');
+      }
     } else {
       // O lançamento do extrato some da lista de pendências (não precisa
       // lançar ele direto); as comandas selecionadas ficam confirmadas.
@@ -470,21 +513,31 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         {candidatos.length === 0 ? (
           <p className="nota-formato">Não sobrou nenhum lançamento sem correspondência pra escolher.</p>
         ) : (
-          candidatos.map((c) => (
-            <div key={c.id} className="item-conta" style={{ padding: 8, marginBottom: 6 }}>
-              <input
-                type="checkbox"
-                checked={casamentoManual.selecionados.has(c.id)}
-                onChange={() => toggleCasamentoManual(c.id)}
-                style={{ marginRight: 10, width: 18, height: 18 }}
-              />
-              <div className="info-conta">
-                <p className="desc">{c.descricao}</p>
-                <p className="venc">{formatarDataBR(c.data)}</p>
+          candidatos.map((c) => {
+            const outraComanda = c.usadoPorSistemaId
+              ? (resultado.faturamentoBrutoSistema || []).find((x) => x.id === c.usadoPorSistemaId)
+              : null;
+            return (
+              <div key={c.id} className="item-conta" style={{ padding: 8, marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={casamentoManual.selecionados.has(c.id)}
+                  onChange={() => toggleCasamentoManual(c.id)}
+                  style={{ marginRight: 10, width: 18, height: 18 }}
+                />
+                <div className="info-conta">
+                  <p className="desc">
+                    {c.descricao}
+                    {outraComanda && (
+                      <span style={{ color: '#c0862e' }}> — já casado automaticamente com "{outraComanda.descricao}"; selecionar aqui libera ela de novo</span>
+                    )}
+                  </p>
+                  <p className="venc">{formatarDataBR(c.data)}</p>
+                </div>
+                <p className="valor-conta">{formatarMoeda(c.valorBruto ?? c.valor)}</p>
               </div>
-              <p className="valor-conta">{formatarMoeda(c.valorBruto ?? c.valor)}</p>
-            </div>
-          ))
+            );
+          })
         )}
         <p className="venc">
           Soma selecionada: {formatarMoeda(soma)} de {formatarMoeda(valorAlvo)}
@@ -752,7 +805,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const confirmadas = visiveis.filter((l) => l.confirmadoNoBanco).length;
     return (
       <div className="card">
-        <h3>Faturamento Bruto do Sistema</h3>
+        {renderTituloSecao('Faturamento Bruto do Sistema', 'faturamentoBruto')}
+        {!secoesRecolhidas.has('faturamentoBruto') && (
+        <>
         <p className="nota-formato">
           Essas comandas do Sistema (Pix e Cartão) ainda não viraram Receita no app — mesmo as que já conciliaram com o extrato. Cada uma lança o valor BRUTO (o que o cliente pagou) como Receita e, quando teve taxa de maquininha, a taxa entra separada como Despesa — o efeito no saldo da Conta Corrente é igual ao valor líquido que realmente caiu no banco.
         </p>
@@ -836,9 +891,16 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
-              renderPainelCasamentoManual(l.valorBruto, l.descricao, (resultado.recebimentos.semCorrespondenciaExtrato || []).filter((e) => !ignorados.has(e.id)))}
+              renderPainelCasamentoManual(l.valorBruto, l.descricao, (() => {
+                const paresPix = resultado.paresPixExtratoSistema || [];
+                return (fontes.extrato.linhas || [])
+                  .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
+                  .map((e) => ({ ...e, usadoPorSistemaId: paresPix.find((p) => p.extratoId === e.id)?.sistemaId || null }));
+              })())}
           </div>
         ))}
+        </>
+        )}
       </div>
     );
   };
@@ -848,7 +910,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     if (visiveis.length === 0) return null;
     return (
       <div className="card">
-        <h3>Recebido em Dinheiro (Sistema)</h3>
+        {renderTituloSecao('Recebido em Dinheiro (Sistema)', 'dinheiro')}
+        {!secoesRecolhidas.has('dinheiro') && (
+        <>
         <p className="nota-formato">
           Esses recebimentos não passam pelo banco nem pela maquininha, então não têm com o que conciliar — lance direto no Caixa pra atualizar o saldo.
         </p>
@@ -870,6 +934,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             </div>
           </div>
         ))}
+        </>
+        )}
       </div>
     );
   };
@@ -899,7 +965,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       {resultado && (
         <>
           <div className="card">
-            <h3>Recebimentos</h3>
+            {renderTituloSecao('Recebimentos', 'recebimentos')}
+            {!secoesRecolhidas.has('recebimentos') && (
+            <>
             <div className="resumo-grid">
               <div className="resumo-item">
                 <p>Conciliado c/ Sistema</p>
@@ -926,6 +994,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
+            </>
+            )}
           </div>
 
           {renderFaturamentoBruto()}
@@ -933,7 +1003,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           {renderRecebimentosDinheiro()}
 
           <div className="card">
-            <h3>Pagamentos</h3>
+            {renderTituloSecao('Pagamentos', 'pagamentos')}
+            {!secoesRecolhidas.has('pagamentos') && (
+            <>
             <div className="resumo-grid">
               <div className="resumo-item">
                 <p>Conciliado c/ Contas Pagas</p>
@@ -954,11 +1026,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
+            </>
+            )}
           </div>
 
           {fontes.vendas.linhas.length > 0 && (
             <div className="card">
-              <h3>Vendas no Cartão vs. Sistema</h3>
+              {renderTituloSecao('Vendas no Cartão vs. Sistema', 'vendasCartao')}
+              {!secoesRecolhidas.has('vendasCartao') && (
+              <>
               <p className="upload-dica">Compara o valor bruto de cada venda no cartão com a comanda correspondente no seu sistema.</p>
               <div className="resumo-grid">
                 <div className="resumo-item">
@@ -974,12 +1050,16 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                   <p>✅ Tudo conciliado.</p>
                 )}
               </div>
+              </>
+              )}
             </div>
           )}
 
           {resultado.taxaMaquininha > 0 && (
             <div className="card">
-              <h3>Taxas da Maquininha</h3>
+              {renderTituloSecao('Taxas da Maquininha', 'taxaMaquininha')}
+              {!secoesRecolhidas.has('taxaMaquininha') && (
+              <>
               <p className="nota-formato">
                 A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
                 Pra bater com o saldo do banco, lance esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
@@ -996,6 +1076,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 >
                   Criar Conta a Pagar com esse valor
                 </button>
+              )}
+              </>
               )}
             </div>
           )}
