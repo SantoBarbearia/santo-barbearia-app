@@ -19,8 +19,8 @@ export function separarCategoria(valorCombinado) {
 // categorias_contabeis, editável pelo usuário na aba Dashboard).
 export default function CategoriaSelect({ categorias, value, onChange }) {
   const { nivel1, nivel2 } = separarCategoria(value);
-  const niveis1 = [...new Set(categorias.map(c => c.nivel1))];
-  const opcoesNivel2 = categorias.filter(c => c.nivel1 === nivel1).map(c => c.nivel2);
+  const niveis1 = [...new Set(categorias.map(c => c.nivel1))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const opcoesNivel2 = categorias.filter(c => c.nivel1 === nivel1).map(c => c.nivel2).sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
   return (
     <div className="categoria-select-duplo">
