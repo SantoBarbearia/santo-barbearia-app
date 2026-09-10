@@ -216,9 +216,11 @@ export function parseSicrediPagamentos(linhas) {
 
 // Exportação do sistema (balanço): mistura recebimentos, pagamentos e linhas de
 // resumo num único CSV. Só os recebimentos "A RECEBER" já pagos entram — via Pix
-// (que aparecem individualmente no extrato) ou via cartão (que batem com o
-// relatório de Vendas da maquininha, não com o extrato direto). "Em aberto" ainda
-// não virou dinheiro, então fica de fora.
+// (que aparecem individualmente no extrato), via cartão (que batem com o
+// relatório de Vendas da maquininha, não com o extrato direto) ou em dinheiro
+// (que não passa pelo banco nem pela maquininha — vai direto pro Caixa, sem
+// conciliar com nada). "Em aberto" ainda não virou dinheiro de verdade, então
+// fica de fora.
 export function parseBalancoSistema(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Tipo');
   const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
@@ -232,7 +234,8 @@ export function parseBalancoSistema(linhas) {
     const formaPagamento = String(r[3] || '').trim();
     const viaPix = /^pix/i.test(formaPagamento);
     const viaCartao = /crédito|débito|cartão/i.test(formaPagamento);
-    if (!viaPix && !viaCartao) continue;
+    const viaDinheiro = /dinheiro/i.test(formaPagamento);
+    if (!viaPix && !viaCartao && !viaDinheiro) continue;
 
     const valor = parseValorBR(r[6]);
     if (!(valor > 0)) continue;
@@ -246,7 +249,8 @@ export function parseBalancoSistema(linhas) {
       valor,
       tipo: 'entrada',
       viaPix,
-      viaCartao
+      viaCartao,
+      viaDinheiro
     });
   }
 

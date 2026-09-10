@@ -270,6 +270,17 @@ export default function App() {
     return data;
   };
 
+  // O Supabase devolve colunas DATE sempre em ISO (yyyy-mm-dd), mesmo quando o
+  // valor foi salvo como dd/mm/yyyy — então uma movimentação pode chegar em
+  // qualquer um dos dois formatos dependendo de quando foi carregada. Aqui
+  // sempre exibimos dd/mm/yyyy, do jeito que a Fernanda prefere.
+  const formatarDataMovParaExibir = (data) => {
+    const iso = dataMovParaISO(data);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return data || '';
+    const [ano, mes, dia] = iso.split('-');
+    return `${dia}/${mes}/${ano}`;
+  };
+
   const dentroDoPeriodoVG = (dataISO) => {
     if (!vgPeriodoInicio && !vgPeriodoFim) return true;
     if (vgPeriodoInicio && dataISO < vgPeriodoInicio) return false;
@@ -350,7 +361,7 @@ export default function App() {
     const linhasMov = [
       ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor'],
       ...movimentacoesVGporConta.map(m => [
-        m.data,
+        formatarDataMovParaExibir(m.data),
         tipoVisualMovimentacao(m) === 'entrada' ? 'Entrada' : tipoVisualMovimentacao(m) === 'saida' ? 'Saída' : 'Transferência',
         m.descricao,
         m.categoria || '',
@@ -426,7 +437,7 @@ export default function App() {
 
     const novaMovimentacao = {
       id: agora + 1,
-      data: new Date().toISOString().split('T')[0],
+      data: new Date().toLocaleDateString('pt-BR'),
       tipo: 'Despesa Paga',
       descricao: conta.descricao,
       valor: conta.valor,
@@ -748,6 +759,29 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
+  // Lança no Caixa um recebimento em dinheiro do Relatório do Sistema — não
+  // passa pelo banco nem pela maquininha, então não tem com o que conciliar,
+  // só precisa entrar no saldo do Caixa igual um Crédito Manual normal.
+  const handleLancarCaixa = (linha) => {
+    const [ano, mes, dia] = linha.data.split('-');
+    const novasContas = { ...contas, caixa: contas.caixa + linha.valor };
+
+    const novaMovimentacao = {
+      id: Date.now(),
+      data: `${dia}/${mes}/${ano}`,
+      tipo: 'Crédito Manual',
+      descricao: `${capitalizarTexto(linha.descricao)} (dinheiro - lançado da Conciliação)`,
+      valor: linha.valor,
+      conta: 'caixa',
+      categoria: linha.categoria || ''
+    };
+    const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
   // Cria a Conta a Pagar da taxa da maquininha direto a partir do resultado
   // da Conciliação, sem precisar digitar nada — só falta pagar de alguma conta.
   const handleCriarContaTaxaMaquininha = (valor) => {
@@ -779,9 +813,10 @@ export default function App() {
       [transferencia.para]: contas[transferencia.para] + parseFloat(transferencia.valor)
     };
 
+    const [anoTransf, mesTransf, diaTransf] = transferencia.data.split('-');
     const novaMovimentacao = {
       id: Date.now(),
-      data: transferencia.data,
+      data: `${diaTransf}/${mesTransf}/${anoTransf}`,
       tipo: 'Transferência',
       descricao: `De ${nomesContas[transferencia.de]} para ${nomesContas[transferencia.para]}`,
       valor: parseFloat(transferencia.valor),
@@ -1026,7 +1061,7 @@ export default function App() {
                 ) : (
                   <table className="tabela">
                     <tbody>
-                      {movimentacoesVGporConta.slice(-8).reverse().map((mov) => {
+                      {[...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).slice(-8).reverse().map((mov) => {
                         const tipoVisual = tipoVisualMovimentacao(mov);
                         const editavel = mov.tipo === 'Crédito Manual' || mov.tipo === 'Débito Manual';
 
@@ -1090,7 +1125,7 @@ export default function App() {
 
                         return (
                           <tr key={mov.id}>
-                            <td>{mov.data}</td>
+                            <td>{formatarDataMovParaExibir(mov.data)}</td>
                             <td>
                               <span className={`badge-${tipoVisual}`}>
                                 {tipoVisual === 'entrada' ? 'Entrada' : tipoVisual === 'saida' ? 'Saída' : 'Transferência'}
@@ -1405,9 +1440,9 @@ export default function App() {
                   <h3>Histórico</h3>
                   <table className="tabela">
                     <tbody>
-                      {movimentacoes.filter(m => m.tipo === 'Transferência').slice(-5).reverse().map((mov) => (
+                      {movimentacoes.filter(m => m.tipo === 'Transferência').sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).slice(-5).reverse().map((mov) => (
                         <tr key={mov.id}>
-                          <td>{mov.data}</td>
+                          <td>{formatarDataMovParaExibir(mov.data)}</td>
                           <td>{nomesContas[mov.de]} → {nomesContas[mov.para]}</td>
                           <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td>
@@ -1430,6 +1465,7 @@ export default function App() {
               movimentacoes={movimentacoes}
               categorias={categorias}
               onLancarMovimentacao={handleLancarDoExtrato}
+              onLancarCaixa={handleLancarCaixa}
               onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
             />
           </div>
