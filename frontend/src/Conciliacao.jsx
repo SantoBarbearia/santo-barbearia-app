@@ -375,17 +375,21 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // Às vezes o cliente faz um pagamento só (um Pix, por exemplo) que no Cash
   // Barber vira dois ou mais lançamentos separados (ex: assinatura + comanda
   // avulsa) — nosso casamento automático não sabe somar vários pra bater com
-  // um só do extrato. Aqui a Fernanda escolhe manualmente quais comandas
-  // formam esse pagamento; a gente soma e tenta confirmar contra o extrato.
+  // um só do extrato (ou o contrário: uma comanda só que o cliente pagou em
+  // duas transferências separadas). Aqui a Fernanda escolhe manualmente quais
+  // comandas formam esse pagamento — pode ser uma só, se ela já conferiu à
+  // mão que bate com mais de uma linha do extrato — e a gente soma e tenta
+  // confirmar contra o extrato.
   const agruparEConfirmarFaturamento = () => {
     const linhas = (resultado.faturamentoBrutoSistema || []).filter((l) => selecionadosFaturamento.has(l.id) && !ignorados.has(l.id));
-    if (linhas.length < 2) return;
+    if (linhas.length < 1) return;
     const somaBruto = Math.round(linhas.reduce((s, l) => s + l.valorBruto, 0) * 100) / 100;
     const candidato = (fontes.extrato.linhas || []).find((e) => e.tipo === 'entrada' && Math.abs(e.valor - somaBruto) < 0.01);
 
+    const descricaoSelecao = linhas.length === 1 ? '1 comanda selecionada' : `${linhas.length} comandas selecionadas`;
     const confirmar = candidato
       ? true
-      : window.confirm(`Não achei no extrato nenhuma entrada de ${formatarMoeda(somaBruto)} (a soma das ${linhas.length} comandas selecionadas). Confirmar esse agrupamento mesmo assim, porque você já verificou manualmente?`);
+      : window.confirm(`Não achei no extrato nenhuma entrada de ${formatarMoeda(somaBruto)} (${descricaoSelecao}). Confirmar mesmo assim, porque você já verificou manualmente (ex: o pagamento veio em mais de uma transferência)?`);
 
     if (!confirmar) return;
 
@@ -678,15 +682,16 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           )}
         </div>
         <p className="nota-formato">
-          Quando um cliente faz um pagamento só (ex: um Pix) que no Cash Barber virou dois ou mais lançamentos (ex: assinatura + comanda), marque a caixinha das comandas envolvidas — a gente soma e confirma o grupo contra o extrato.
+          Quando um pagamento veio dividido (ex: assinatura + comanda pagas com o mesmo Pix, ou uma comanda só paga em duas transferências separadas), marque a caixinha das comandas envolvidas — a gente soma e confirma contra o extrato. Pode marcar só uma, se você já conferiu na mão que ela bate com mais de uma linha do extrato.
         </p>
         {(() => {
           const selecionadasVisiveis = visiveis.filter((l) => selecionadosFaturamento.has(l.id));
-          if (selecionadasVisiveis.length < 2) return null;
+          if (selecionadasVisiveis.length < 1) return null;
+          const rotulo = selecionadasVisiveis.length === 1 ? '1 Selecionada' : `${selecionadasVisiveis.length} Selecionadas`;
           return (
             <div className="acoes" style={{ marginBottom: 10 }}>
               <button onClick={agruparEConfirmarFaturamento} className="btn-pagar">
-                Agrupar e Confirmar {selecionadasVisiveis.length} Selecionadas (soma {formatarMoeda(selecionadasVisiveis.reduce((s, l) => s + l.valorBruto, 0))})
+                Confirmar {rotulo} (soma {formatarMoeda(selecionadasVisiveis.reduce((s, l) => s + l.valorBruto, 0))})
               </button>
               <button onClick={() => setSelecionadosFaturamento(new Set())} className="btn-cancelar">Limpar Seleção</button>
             </div>
