@@ -394,29 +394,54 @@ export default function App() {
     aplicarFormatoContabil(wsResumo, ['B', 'C', 'D', 'E', 'F'], 11, 11 + saldoPorContaVG.length);
 
     const movimentacoesOrdenadas = [...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id);
-    const linhaSaldoAnterior = (l) => ['', '', '', 'Saldo Anterior', l.nome, l.saldoAnterior];
-    const linhaSaldoFinal = (l) => ['', '', '', 'Saldo Final', l.nome, l.saldoFinal];
 
-    const linhasMov = [
-      ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor'],
-      ...saldoPorContaVG.map(linhaSaldoAnterior),
-      ...movimentacoesOrdenadas.map(m => {
-        const tipoVisual = tipoVisualMovimentacao(m);
-        const valorComSinal = tipoVisual === 'saida' ? -m.valor : m.valor;
+    // Agrupa por conta (na ordem do extrato: cronológica, do saldo anterior até
+    // o final) em vez de misturar todas as contas juntas — só assim o saldo
+    // parcial de cada linha faz sentido e dá pra achar exatamente onde bateu
+    // errado, comparando linha a linha com o extrato do banco.
+    const blocosPorConta = saldoPorContaVG.flatMap((l) => {
+      const movsDaConta = movimentacoesOrdenadas.filter((m) => (
+        m.tipo === 'Transferência' ? (m.de === l.chave || m.para === l.chave) : m.conta === l.chave
+      ));
+      let saldoCorrente = l.saldoAnterior;
+      const linhasTransacoes = movsDaConta.map((m) => {
+        let valorComSinal;
+        let tipoLabel;
+        if (m.tipo === 'Transferência') {
+          const saida = m.de === l.chave;
+          valorComSinal = saida ? -m.valor : m.valor;
+          tipoLabel = saida ? 'Saída (Transferência)' : 'Entrada (Transferência)';
+        } else {
+          const tipoVisual = tipoVisualMovimentacao(m);
+          valorComSinal = tipoVisual === 'saida' ? -m.valor : m.valor;
+          tipoLabel = tipoVisual === 'entrada' ? 'Entrada' : 'Saída';
+        }
+        saldoCorrente += valorComSinal;
         return [
           formatarDataMovParaExibir(m.data),
-          tipoVisual === 'entrada' ? 'Entrada' : tipoVisual === 'saida' ? 'Saída' : 'Transferência',
+          tipoLabel,
           m.descricao,
           m.categoria || '',
           m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
-          valorComSinal
+          valorComSinal,
+          saldoCorrente
         ];
-      }),
-      ...saldoPorContaVG.map(linhaSaldoFinal),
-      ['', '', '', '', 'Total Geral', saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0)]
+      });
+      return [
+        ['', '', '', 'Saldo Anterior', l.nome, l.saldoAnterior, l.saldoAnterior],
+        ...linhasTransacoes,
+        ['', '', '', 'Saldo Final', l.nome, l.saldoFinal, l.saldoFinal],
+        ['', '', '', '', '', '', '']
+      ];
+    });
+
+    const linhasMov = [
+      ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor', 'Saldo Parcial'],
+      ...blocosPorConta,
+      ['', '', '', '', 'Total Geral', saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0), '']
     ];
     const wsMov = XLSX.utils.aoa_to_sheet(linhasMov);
-    aplicarFormatoContabil(wsMov, ['F'], 2, linhasMov.length);
+    aplicarFormatoContabil(wsMov, ['F', 'G'], 2, linhasMov.length);
 
     const linhasContas = [
       ['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com'],
@@ -852,6 +877,52 @@ export default function App() {
       categoria: linha.categoria || ''
     };
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
+  // Lança o faturamento de comandas do Sistema pelo valor BRUTO (o que o
+  // cliente pagou) — quando a comanda teve taxa de maquininha, cria também
+  // uma Despesa só com a taxa, na mesma conta. A soma das duas dá exatamente
+  // o valor líquido que realmente caiu no banco, então o saldo da Conta
+  // Corrente bate com o extrato mesmo sem nunca ter passado por lá. Recebe
+  // uma lista pra dar pra lançar uma comanda ou todas de uma vez só, sem
+  // fazer um round-trip ao banco de dados por comanda.
+  const handleLancarFaturamentoBruto = (linhas) => {
+    const baseId = Date.now();
+    let delta = 0;
+    const novasMovs = [];
+    linhas.forEach((linha, i) => {
+      const [ano, mes, dia] = linha.data.split('-');
+      const dataBR = `${dia}/${mes}/${ano}`;
+      delta += linha.valorBruto;
+      novasMovs.push({
+        id: baseId + i * 2,
+        data: dataBR,
+        tipo: 'Crédito Manual',
+        descricao: `${capitalizarTexto(linha.descricao)} (lançado da Conciliação)`,
+        valor: linha.valorBruto,
+        conta: 'sicredi',
+        categoria: linha.categoria || ''
+      });
+      if (linha.taxa > 0) {
+        delta -= linha.taxa;
+        novasMovs.push({
+          id: baseId + i * 2 + 1,
+          data: dataBR,
+          tipo: 'Débito Manual',
+          descricao: `Taxa da maquininha - ${capitalizarTexto(linha.descricao)} (lançado da Conciliação)`,
+          valor: linha.taxa,
+          conta: 'sicredi',
+          categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)'
+        });
+      }
+    });
+
+    const novasContas = { ...contas, sicredi: contas.sicredi + delta };
+    const novasMovimentacoes = [...movimentacoes, ...novasMovs];
 
     setContas(novasContas);
     setMovimentacoes(novasMovimentacoes);
@@ -1542,6 +1613,7 @@ export default function App() {
               categorias={categorias}
               onLancarMovimentacao={handleLancarDoExtrato}
               onDividirLancamento={handleDividirLancamento}
+              onLancarFaturamentoBruto={handleLancarFaturamentoBruto}
               onLancarCaixa={handleLancarCaixa}
               onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
             />

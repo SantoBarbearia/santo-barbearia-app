@@ -221,9 +221,28 @@ export function parseSicrediPagamentos(linhas) {
 // (que não passa pelo banco nem pela maquininha — vai direto pro Caixa, sem
 // conciliar com nada). "Em aberto" ainda não virou dinheiro de verdade, então
 // fica de fora.
+//
+// O Cash Barber já separa cada comanda paga no cartão em duas linhas: o valor
+// líquido "A Receber" ("Comanda Fulano - data hora") e a taxa da maquininha
+// "A Pagar" da mesma comanda ("Taxa do pagamento da comanda Fulano - data
+// hora") — juntamos as duas pelo identificador da comanda (o texto depois de
+// "Comanda"/"Taxa do pagamento da comanda") pra saber o valor BRUTO que o
+// cliente realmente pagou, sem mudar o "valor" (líquido) usado na conciliação
+// com o extrato do banco.
 export function parseBalancoSistema(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Tipo');
   const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
+
+  const taxaPorComanda = {};
+  for (let i = inicio; i < linhas.length; i++) {
+    const r = linhas[i];
+    if (String(r[0] || '').trim() !== 'A PAGAR') continue;
+    const m = String(r[1] || '').trim().match(/^Taxa do pagamento da comanda\s+(.+)$/i);
+    if (!m) continue;
+    const valorTaxa = parseValorBR(r[6]);
+    if (valorTaxa > 0) taxaPorComanda[m[1].trim()] = valorTaxa;
+  }
+
   const registros = [];
 
   for (let i = inicio; i < linhas.length; i++) {
@@ -242,11 +261,18 @@ export function parseBalancoSistema(linhas) {
     const data = paraDataISO(r[5]) || paraDataISO(r[4]);
     if (!data) continue;
 
+    const descricao = String(r[1] || 'Recebimento').trim();
+    const idComanda = (descricao.match(/^Comanda\s+(.+)$/i) || [])[1];
+    const taxa = (idComanda && taxaPorComanda[idComanda.trim()]) || 0;
+
     registros.push({
       id: novoId('sis'),
       data,
-      descricao: String(r[1] || 'Recebimento'),
+      descricao,
       valor,
+      valorLiquido: valor,
+      valorBruto: Math.round((valor + taxa) * 100) / 100,
+      taxa,
       tipo: 'entrada',
       viaPix,
       viaCartao,

@@ -60,7 +60,7 @@ function normalizarDescricaoParaComparacao(descricao) {
     .trim();
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onDividirLancamento }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onDividirLancamento, onLancarFaturamentoBruto }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -247,6 +247,13 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // conciliar, só precisa ser lançado no Caixa manualmente.
     const recebimentosDinheiro = sistemaDinheiro.filter((l) => dentroDoPeriodoDoExtrato(l.data));
 
+    // Toda comanda do Sistema paga via Pix ou cartão (esteja ou não conciliada
+    // com o extrato) — pra lançar o faturamento pelo valor BRUTO (o que o
+    // cliente pagou), com a taxa da maquininha entrando como despesa separada.
+    const faturamentoBrutoSistema = fontes.sistema.linhas
+      .filter((l) => !l.viaDinheiro)
+      .filter((l) => dentroDoPeriodoDoExtrato(l.data));
+
     const passo1 = conciliar(entradasExtrato, sistemaPix);
     const passo2 = conciliar(passo1.semParA, maquininha);
     const passo2b = conciliar(passo2.semParA, lancamentosManuaisEntrada);
@@ -281,7 +288,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         semCorrespondenciaSistema: passo4.semParB
       },
       taxaMaquininha,
-      recebimentosDinheiro
+      recebimentosDinheiro,
+      faturamentoBrutoSistema
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -319,6 +327,27 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
     marcarIgnorado(linha.id);
+  };
+
+  const lancarFaturamentoBruto = (linha) => {
+    const categoria = categoriaPorLinha[linha.id] ?? sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
+    onLancarFaturamentoBruto([{ ...linha, categoria }]);
+    marcarIgnorado(linha.id);
+  };
+
+  const lancarTodoFaturamentoBruto = () => {
+    const visiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+    if (visiveis.length === 0) return;
+    const linhasComCategoria = visiveis.map((l) => ({
+      ...l,
+      categoria: categoriaPorLinha[l.id] ?? sugerirCategoriaPorHistorico(l.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO
+    }));
+    onLancarFaturamentoBruto(linhasComCategoria);
+    setIgnorados((s) => {
+      const novo = new Set(s);
+      visiveis.forEach((l) => novo.add(l.id));
+      return novo;
+    });
   };
 
   // Uma linha do extrato às vezes mistura mais de uma classificação (ex: uma
@@ -558,6 +587,59 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
 
+  const renderFaturamentoBruto = () => {
+    const visiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+    if (visiveis.length === 0) return null;
+    const totalBruto = visiveis.reduce((s, l) => s + l.valorBruto, 0);
+    const totalTaxa = visiveis.reduce((s, l) => s + (l.taxa || 0), 0);
+    return (
+      <div className="card">
+        <h3>Faturamento Bruto do Sistema</h3>
+        <p className="nota-formato">
+          Essas comandas do Sistema (Pix e Cartão) ainda não viraram Receita no app — mesmo as que já conciliaram com o extrato. Cada uma lança o valor BRUTO (o que o cliente pagou) como Receita e, quando teve taxa de maquininha, a taxa entra separada como Despesa — o efeito no saldo da Conta Corrente é igual ao valor líquido que realmente caiu no banco.
+        </p>
+        <div className="resumo-grid">
+          <div className="resumo-item">
+            <p>Comandas</p>
+            <p className="valor-resumo">{visiveis.length}</p>
+          </div>
+          <div className="resumo-item">
+            <p>Total Bruto</p>
+            <p className="valor-resumo">{formatarMoeda(totalBruto)}</p>
+          </div>
+          <div className="resumo-item">
+            <p>Total em Taxas</p>
+            <p className="valor-resumo">{formatarMoeda(totalTaxa)}</p>
+          </div>
+        </div>
+        <div className="acoes" style={{ margin: '10px 0' }}>
+          <button onClick={lancarTodoFaturamentoBruto} className="btn-transferir">Lançar Faturamento de Todas as Comandas</button>
+        </div>
+        {visiveis.map((l) => (
+          <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
+            <div className="info-conta">
+              <p className="desc">{l.descricao} <span className="origem-tag">(Sistema)</span></p>
+              <p className="venc">
+                {formatarDataBR(l.data)}
+                {l.taxa > 0 && ` — líquido ${formatarMoeda(l.valorLiquido)} + taxa ${formatarMoeda(l.taxa)}`}
+              </p>
+            </div>
+            <p className="valor-conta">{formatarMoeda(l.valorBruto)}</p>
+            <div className="acoes">
+              <CategoriaSelect
+                categorias={categorias || []}
+                value={categoriaPorLinha[l.id] ?? sugerirCategoriaPorHistorico(l.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO}
+                onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
+              />
+              <button onClick={() => lancarFaturamentoBruto(l)} className="btn-pagar">Lançar</button>
+              <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderRecebimentosDinheiro = () => {
     const visiveis = (resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id));
     if (visiveis.length === 0) return null;
@@ -642,6 +724,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               )}
             </div>
           </div>
+
+          {renderFaturamentoBruto()}
 
           {renderRecebimentosDinheiro()}
 
