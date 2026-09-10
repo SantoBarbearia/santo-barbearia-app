@@ -74,6 +74,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [categoriaPorLinha, setCategoriaPorLinha] = useState({});
   const [dividindo, setDividindo] = useState(null);
   const [partesDivisao, setPartesDivisao] = useState([]);
+  const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
 
   const atualizarFonte = (chave, patch) => {
@@ -304,6 +305,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
+    setSelecionadosFaturamento(new Set());
   };
 
   const marcarIgnorado = (id) => {
@@ -360,6 +362,43 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       visiveis.forEach((l) => novo.add(l.id));
       return novo;
     });
+  };
+
+  const toggleSelecaoFaturamento = (id) => {
+    setSelecionadosFaturamento((s) => {
+      const novo = new Set(s);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return novo;
+    });
+  };
+
+  // Às vezes o cliente faz um pagamento só (um Pix, por exemplo) que no Cash
+  // Barber vira dois ou mais lançamentos separados (ex: assinatura + comanda
+  // avulsa) — nosso casamento automático não sabe somar vários pra bater com
+  // um só do extrato. Aqui a Fernanda escolhe manualmente quais comandas
+  // formam esse pagamento; a gente soma e tenta confirmar contra o extrato.
+  const agruparEConfirmarFaturamento = () => {
+    const linhas = (resultado.faturamentoBrutoSistema || []).filter((l) => selecionadosFaturamento.has(l.id) && !ignorados.has(l.id));
+    if (linhas.length < 2) return;
+    const somaBruto = Math.round(linhas.reduce((s, l) => s + l.valorBruto, 0) * 100) / 100;
+    const candidato = (fontes.extrato.linhas || []).find((e) => e.tipo === 'entrada' && Math.abs(e.valor - somaBruto) < 0.01);
+
+    const confirmar = candidato
+      ? true
+      : window.confirm(`Não achei no extrato nenhuma entrada de ${formatarMoeda(somaBruto)} (a soma das ${linhas.length} comandas selecionadas). Confirmar esse agrupamento mesmo assim, porque você já verificou manualmente?`);
+
+    if (!confirmar) return;
+
+    setResultado((r) => ({
+      ...r,
+      faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((l) =>
+        selecionadosFaturamento.has(l.id) ? { ...l, confirmadoNoBanco: true } : l
+      )
+    }));
+    setSelecionadosFaturamento(new Set());
+    if (candidato) {
+      alert(`Confirmado! A soma de ${formatarMoeda(somaBruto)} bate com o lançamento de ${formatarDataBR(candidato.data)} no extrato.`);
+    }
   };
 
   // Uma linha do extrato às vezes mistura mais de uma classificação (ex: uma
@@ -638,8 +677,29 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             <button onClick={() => lancarTodoFaturamentoBruto(true)} className="btn-editar">Lançar Só as Confirmadas ({confirmadas})</button>
           )}
         </div>
+        <p className="nota-formato">
+          Quando um cliente faz um pagamento só (ex: um Pix) que no Cash Barber virou dois ou mais lançamentos (ex: assinatura + comanda), marque a caixinha das comandas envolvidas — a gente soma e confirma o grupo contra o extrato.
+        </p>
+        {(() => {
+          const selecionadasVisiveis = visiveis.filter((l) => selecionadosFaturamento.has(l.id));
+          if (selecionadasVisiveis.length < 2) return null;
+          return (
+            <div className="acoes" style={{ marginBottom: 10 }}>
+              <button onClick={agruparEConfirmarFaturamento} className="btn-pagar">
+                Agrupar e Confirmar {selecionadasVisiveis.length} Selecionadas (soma {formatarMoeda(selecionadasVisiveis.reduce((s, l) => s + l.valorBruto, 0))})
+              </button>
+              <button onClick={() => setSelecionadosFaturamento(new Set())} className="btn-cancelar">Limpar Seleção</button>
+            </div>
+          );
+        })()}
         {visiveis.map((l) => (
           <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
+            <input
+              type="checkbox"
+              checked={selecionadosFaturamento.has(l.id)}
+              onChange={() => toggleSelecaoFaturamento(l.id)}
+              style={{ marginRight: 10, width: 18, height: 18 }}
+            />
             <div className="info-conta">
               <p className="desc">
                 {l.descricao} <span className="origem-tag">(Sistema)</span>{' '}
