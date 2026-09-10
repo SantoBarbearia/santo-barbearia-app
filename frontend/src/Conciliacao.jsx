@@ -621,7 +621,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <p className="desc">{l.descricao} <span className="origem-tag">(Sistema)</span></p>
               <p className="venc">
                 {formatarDataBR(l.data)}
-                {l.taxa > 0 && ` — líquido ${formatarMoeda(l.valorLiquido)} + taxa ${formatarMoeda(l.taxa)}`}
+                {l.taxa > 0 && ` — taxa ${formatarMoeda(l.taxa)} (R$ ${l.valorLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} líquido no banco)`}
               </p>
             </div>
             <p className="valor-conta">{formatarMoeda(l.valorBruto)}</p>
