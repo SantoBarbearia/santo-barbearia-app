@@ -75,6 +75,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [dividindo, setDividindo] = useState(null);
   const [partesDivisao, setPartesDivisao] = useState([]);
   const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
+  const [casamentoManual, setCasamentoManual] = useState(null);
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
 
   const atualizarFonte = (chave, patch) => {
@@ -306,6 +307,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setIgnorados(new Set());
     setTaxaJaLancada(false);
     setSelecionadosFaturamento(new Set());
+    setCasamentoManual(null);
   };
 
   const marcarIgnorado = (id) => {
@@ -399,6 +401,103 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     if (candidato) {
       alert(`Confirmado! A soma de ${formatarMoeda(somaBruto)} bate com o lançamento de ${formatarDataBR(candidato.data)} no extrato.`);
     }
+  };
+
+  // Casamento manual bidirecional: parte de UM item de um lado (uma comanda
+  // pendente, ou um lançamento do extrato sem correspondência) e deixa
+  // escolher QUANTOS itens do outro lado juntos formam aquele pagamento —
+  // cobre tanto "uma comanda paga em duas transferências" quanto "duas
+  // comandas pagas com uma transferência só".
+  const iniciarCasamentoDeComanda = (comandaId) => {
+    setCasamentoManual((c) => (c?.lado === 'comanda' && c.id === comandaId ? null : { lado: 'comanda', id: comandaId, selecionados: new Set() }));
+  };
+
+  const iniciarCasamentoDeExtrato = (extratoId) => {
+    setCasamentoManual((c) => (c?.lado === 'extrato' && c.id === extratoId ? null : { lado: 'extrato', id: extratoId, selecionados: new Set() }));
+  };
+
+  const cancelarCasamentoManual = () => setCasamentoManual(null);
+
+  const toggleCasamentoManual = (id) => {
+    setCasamentoManual((c) => {
+      if (!c) return c;
+      const novo = new Set(c.selecionados);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return { ...c, selecionados: novo };
+    });
+  };
+
+  const confirmarCasamentoManual = () => {
+    if (!casamentoManual || casamentoManual.selecionados.size === 0) return;
+    if (casamentoManual.lado === 'comanda') {
+      // A comanda em questão é confirmada; os lançamentos do extrato
+      // selecionados somem da lista de pendências (o dinheiro deles já está
+      // explicado pela comanda, que vai virar Receita no Faturamento Bruto).
+      setResultado((r) => ({
+        ...r,
+        faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((x) =>
+          x.id === casamentoManual.id ? { ...x, confirmadoNoBanco: true } : x
+        )
+      }));
+      setIgnorados((s) => {
+        const novo = new Set(s);
+        casamentoManual.selecionados.forEach((id) => novo.add(id));
+        return novo;
+      });
+    } else {
+      // O lançamento do extrato some da lista de pendências (não precisa
+      // lançar ele direto); as comandas selecionadas ficam confirmadas.
+      setResultado((r) => ({
+        ...r,
+        faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((x) =>
+          casamentoManual.selecionados.has(x.id) ? { ...x, confirmadoNoBanco: true } : x
+        )
+      }));
+      setIgnorados((s) => new Set(s).add(casamentoManual.id));
+    }
+    setCasamentoManual(null);
+  };
+
+  const renderPainelCasamentoManual = (valorAlvo, descricaoAlvo, candidatos) => {
+    const selecionados = candidatos.filter((c) => casamentoManual.selecionados.has(c.id));
+    const soma = Math.round(selecionados.reduce((s, c) => s + (c.valorBruto ?? c.valor), 0) * 100) / 100;
+    const bate = Math.abs(soma - valorAlvo) < 0.01;
+    return (
+      <div className="mapeamento" style={{ width: '100%' }}>
+        <p className="nota-formato">
+          Selecione o(s) lançamento(s) que juntos formam "{descricaoAlvo}" ({formatarMoeda(valorAlvo)}).
+        </p>
+        {candidatos.length === 0 ? (
+          <p className="nota-formato">Não sobrou nenhum lançamento sem correspondência pra escolher.</p>
+        ) : (
+          candidatos.map((c) => (
+            <div key={c.id} className="item-conta" style={{ padding: 8, marginBottom: 6 }}>
+              <input
+                type="checkbox"
+                checked={casamentoManual.selecionados.has(c.id)}
+                onChange={() => toggleCasamentoManual(c.id)}
+                style={{ marginRight: 10, width: 18, height: 18 }}
+              />
+              <div className="info-conta">
+                <p className="desc">{c.descricao}</p>
+                <p className="venc">{formatarDataBR(c.data)}</p>
+              </div>
+              <p className="valor-conta">{formatarMoeda(c.valorBruto ?? c.valor)}</p>
+            </div>
+          ))
+        )}
+        <p className="venc">
+          Soma selecionada: {formatarMoeda(soma)} de {formatarMoeda(valorAlvo)}
+          {!bate && selecionados.length > 0 && <span style={{ color: '#c0392b' }}> — ainda não bate</span>}
+        </p>
+        <div className="acoes" style={{ marginTop: 8 }}>
+          <button onClick={confirmarCasamentoManual} disabled={selecionados.length === 0} className="btn-salvar">
+            {bate ? 'Confirmar Casamento' : 'Confirmar Mesmo Assim'}
+          </button>
+          <button onClick={cancelarCasamentoManual} className="btn-cancelar">Cancelar</button>
+        </div>
+      </div>
+    );
   };
 
   // Uma linha do extrato às vezes mistura mais de uma classificação (ex: uma
@@ -549,7 +648,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
 
-  const renderDivergencias = (titulo, lista, origemLabel) => {
+  const renderDivergencias = (titulo, lista, origemLabel, permitirCasarComSistema = false) => {
     const visiveis = lista.filter((l) => !ignorados.has(l.id));
     if (visiveis.length === 0) return null;
     return (
@@ -574,10 +673,17 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                   <button onClick={() => (dividindo === l.id ? cancelarDivisao() : iniciarDivisao(l))} className="btn-editar">
                     {dividindo === l.id ? 'Cancelar Divisão' : 'Dividir em Categorias'}
                   </button>
+                  {permitirCasarComSistema && l.tipo === 'entrada' && (
+                    <button onClick={() => iniciarCasamentoDeExtrato(l.id)} className="btn-editar">
+                      {casamentoManual?.lado === 'extrato' && casamentoManual.id === l.id ? 'Cancelar Casamento' : 'Casar com Comandas do Sistema'}
+                    </button>
+                  )}
                 </>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
+            {casamentoManual?.lado === 'extrato' && casamentoManual.id === l.id &&
+              renderPainelCasamentoManual(l.valor, l.descricao, (resultado.faturamentoBrutoSistema || []).filter((c) => !c.confirmadoNoBanco && !ignorados.has(c.id)))}
             {dividindo === l.id && (() => {
               const somaCentavos = Math.round(partesDivisao.reduce((s, p) => s + (parseFloat(p.valor) || 0), 0) * 100);
               const totalCentavos = Math.round(l.valor * 100);
@@ -722,8 +828,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
               />
               <button onClick={() => lancarFaturamentoBruto(l)} className="btn-pagar">Lançar</button>
+              {!l.confirmadoNoBanco && (
+                <button onClick={() => iniciarCasamentoDeComanda(l.id)} className="btn-editar">
+                  {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id ? 'Cancelar Casamento' : 'Casar com Lançamentos do Extrato'}
+                </button>
+              )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
+            {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
+              renderPainelCasamentoManual(l.valorBruto, l.descricao, (resultado.recebimentos.semCorrespondenciaExtrato || []).filter((e) => !ignorados.has(e.id)))}
           </div>
         ))}
       </div>
@@ -802,7 +915,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               </div>
             </div>
             <div style={{ marginTop: 15 }}>
-              {renderDivergencias('Entradas no extrato sem correspondência:', resultado.recebimentos.semCorrespondenciaExtrato, 'Extrato')}
+              {renderDivergencias('Entradas no extrato sem correspondência:', resultado.recebimentos.semCorrespondenciaExtrato, 'Extrato', true)}
               {renderDivergencias('No Sistema mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaSistema, 'Sistema')}
               {renderDivergencias('Na Maquininha mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaMaquininha, 'Maquininha')}
               {renderDivergencias('Lançado manualmente no app mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaManual, 'Lançamento Manual')}
