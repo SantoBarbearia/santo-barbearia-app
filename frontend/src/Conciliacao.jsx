@@ -47,7 +47,7 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onCriarContaTaxaMaquininha }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -179,6 +179,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const saidasExtrato = fontes.extrato.linhas.filter((l) => l.tipo === 'saida');
     const sistemaPix = fontes.sistema.linhas.filter((l) => l.viaPix !== false);
     const sistemaCartao = fontes.sistema.linhas.filter((l) => l.viaCartao === true);
+    const sistemaDinheiro = fontes.sistema.linhas.filter((l) => l.viaDinheiro === true);
     const maquininha = fontes.maquininha.linhas;
     const vendas = fontes.vendas.linhas;
 
@@ -227,6 +228,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'saida' }))
       .filter((m) => m.data && dentroDoPeriodoDoExtrato(m.data));
 
+    // Dinheiro não passa pelo banco nem pela maquininha — não tem com o que
+    // conciliar, só precisa ser lançado no Caixa manualmente.
+    const recebimentosDinheiro = sistemaDinheiro.filter((l) => dentroDoPeriodoDoExtrato(l.data));
+
     const passo1 = conciliar(entradasExtrato, sistemaPix);
     const passo2 = conciliar(passo1.semParA, maquininha);
     const passo2b = conciliar(passo2.semParA, lancamentosManuaisEntrada);
@@ -260,7 +265,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         semCorrespondenciaVendas: passo4.semParA,
         semCorrespondenciaSistema: passo4.semParB
       },
-      taxaMaquininha
+      taxaMaquininha,
+      recebimentosDinheiro
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -273,6 +279,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const lancarMovimentacao = (linha) => {
     const categoriaPadrao = linha.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '';
     onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
+    marcarIgnorado(linha.id);
+  };
+
+  const lancarNoCaixa = (linha) => {
+    onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? CATEGORIA_PADRAO_RECEBIMENTO });
     marcarIgnorado(linha.id);
   };
 
@@ -420,6 +431,37 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
 
+  const renderRecebimentosDinheiro = () => {
+    const visiveis = (resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id));
+    if (visiveis.length === 0) return null;
+    return (
+      <div className="card">
+        <h3>Recebido em Dinheiro (Sistema)</h3>
+        <p className="nota-formato">
+          Esses recebimentos não passam pelo banco nem pela maquininha, então não têm com o que conciliar — lance direto no Caixa pra atualizar o saldo.
+        </p>
+        {visiveis.map((l) => (
+          <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
+            <div className="info-conta">
+              <p className="desc">{l.descricao} <span className="origem-tag">(Sistema)</span></p>
+              <p className="venc">{formatarDataBR(l.data)}</p>
+            </div>
+            <p className="valor-conta">{formatarMoeda(l.valor)}</p>
+            <div className="acoes">
+              <CategoriaSelect
+                categorias={categorias || []}
+                value={categoriaPorLinha[l.id] ?? CATEGORIA_PADRAO_RECEBIMENTO}
+                onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
+              />
+              <button onClick={() => lancarNoCaixa(l)} className="btn-pagar">Lançar no Caixa</button>
+              <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="card">
@@ -473,6 +515,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               )}
             </div>
           </div>
+
+          {renderRecebimentosDinheiro()}
 
           <div className="card">
             <h3>Pagamentos</h3>
