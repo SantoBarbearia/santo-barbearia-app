@@ -223,12 +223,13 @@ export function parseSicrediPagamentos(linhas) {
 // fica de fora.
 //
 // O Cash Barber já separa cada comanda paga no cartão em duas linhas: o valor
-// líquido "A Receber" ("Comanda Fulano - data hora") e a taxa da maquininha
-// "A Pagar" da mesma comanda ("Taxa do pagamento da comanda Fulano - data
-// hora") — juntamos as duas pelo identificador da comanda (o texto depois de
-// "Comanda"/"Taxa do pagamento da comanda") pra saber o valor BRUTO que o
-// cliente realmente pagou, sem mudar o "valor" (líquido) usado na conciliação
-// com o extrato do banco.
+// BRUTO da comanda "A Receber" ("Comanda Fulano - data hora" — o que o
+// cliente pagou) e a taxa da maquininha "A Pagar" da mesma comanda ("Taxa do
+// pagamento da comanda Fulano - data hora") — juntamos as duas pelo
+// identificador da comanda (o texto depois de "Comanda"/"Taxa do pagamento da
+// comanda") pra calcular o valor LÍQUIDO que realmente cai no banco (bruto -
+// taxa), sem mudar o "valor" (bruto) usado na conciliação com o Relatório de
+// Vendas da maquininha.
 export function parseBalancoSistema(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Tipo');
   const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
@@ -270,8 +271,8 @@ export function parseBalancoSistema(linhas) {
       data,
       descricao,
       valor,
-      valorLiquido: valor,
-      valorBruto: Math.round((valor + taxa) * 100) / 100,
+      valorBruto: valor,
+      valorLiquido: Math.round((valor - taxa) * 100) / 100,
       taxa,
       tipo: 'entrada',
       viaPix,
