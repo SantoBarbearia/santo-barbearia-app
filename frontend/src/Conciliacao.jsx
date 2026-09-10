@@ -47,6 +47,19 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
+// Reduz uma descrição do extrato ao "miolo" dela (sem número de referência,
+// data ou pontuação), pra comparar "SICREDI DEBITO ELO-862207549 |0001-59"
+// desse mês com "SICREDI DEBITO ELO-839911204 |0001-59" de um mês anterior
+// e reconhecer que é o mesmo tipo de lançamento.
+function normalizarDescricaoParaComparacao(descricao) {
+  return String(descricao || '')
+    .toUpperCase()
+    .replace(/[0-9]/g, ' ')
+    .replace(/[^\p{L}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onDividirLancamento }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
@@ -278,14 +291,33 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setIgnorados((s) => new Set(s).add(id));
   };
 
+  // Olha os lançamentos já classificados anteriormente com uma descrição
+  // parecida (ex: mesmo estabelecimento, ignorando número de referência) e
+  // sugere a classificação usada da última vez — se nunca apareceu nada
+  // parecido, não sugere nada.
+  const sugerirCategoriaPorHistorico = (descricao) => {
+    const alvo = normalizarDescricaoParaComparacao(descricao);
+    if (alvo.length < 4) return null;
+    // Compara por "prefixo em comum" em vez de igualdade exata: o lançamento já
+    // salvo carrega sufixos tipo "(lançado da Conciliação)" ou "(parte 1/3 -
+    // lançado da Conciliação)" que a linha crua do extrato ainda não tem.
+    const candidatos = (movimentacoes || [])
+      .filter((m) => m.categoria)
+      .map((m) => ({ categoria: m.categoria, normalizado: normalizarDescricaoParaComparacao(m.descricao), dataISO: paraDataISO(m.data) || '' }))
+      .filter((m) => m.normalizado.length >= 4 && (m.normalizado.startsWith(alvo) || alvo.startsWith(m.normalizado)))
+      .sort((a, b) => b.dataISO.localeCompare(a.dataISO));
+    return candidatos.length > 0 ? candidatos[0].categoria : null;
+  };
+
   const lancarMovimentacao = (linha) => {
-    const categoriaPadrao = linha.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '';
+    const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? (linha.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '');
     onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
     marcarIgnorado(linha.id);
   };
 
   const lancarNoCaixa = (linha) => {
-    onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? CATEGORIA_PADRAO_RECEBIMENTO });
+    const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
+    onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
     marcarIgnorado(linha.id);
   };
 
@@ -455,7 +487,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <>
                   <CategoriaSelect
                     categorias={categorias || []}
-                    value={categoriaPorLinha[l.id] ?? (l.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '')}
+                    value={categoriaPorLinha[l.id] ?? sugerirCategoriaPorHistorico(l.descricao) ?? (l.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '')}
                     onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
                   />
                   <button onClick={() => lancarMovimentacao(l)} className="btn-pagar">Lançar na Conta Corrente</button>
@@ -545,7 +577,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             <div className="acoes">
               <CategoriaSelect
                 categorias={categorias || []}
-                value={categoriaPorLinha[l.id] ?? CATEGORIA_PADRAO_RECEBIMENTO}
+                value={categoriaPorLinha[l.id] ?? sugerirCategoriaPorHistorico(l.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO}
                 onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
               />
               <button onClick={() => lancarNoCaixa(l)} className="btn-pagar">Lançar no Caixa</button>
