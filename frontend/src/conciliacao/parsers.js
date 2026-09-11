@@ -340,6 +340,49 @@ export function calcularTaxasPagamentos(linhas) {
   return Math.round(total * 100) / 100;
 }
 
+// Mesma coisa que calcularTaxasVendas, mas agrupada por dia — pra lançar a
+// despesa da taxa no dia real em que ela saiu, em vez de um valor único.
+export function calcularTaxasVendasPorDia(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data da venda');
+  if (idxCabecalho === -1) return [];
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  const porDia = {};
+  dados.forEach((r) => {
+    const data = paraDataISO(r[0]);
+    const taxa = parseValorBR(r[17]) || 0;
+    if (!data) return;
+    porDia[data] = (porDia[data] || 0) + taxa;
+  });
+
+  return Object.entries(porDia)
+    .map(([data, valor]) => ({ data, valor: Math.round(valor * 100) / 100 }))
+    .filter((d) => d.valor > 0)
+    .sort((a, b) => a.data.localeCompare(b.data));
+}
+
+// Mesma coisa que calcularTaxasPagamentos, mas agrupada por dia — pra lançar a
+// despesa da taxa no dia real em que ela saiu, em vez de um valor único.
+export function calcularTaxasPagamentosPorDia(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data de pagamento');
+  if (idxCabecalho === -1) return [];
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  const porDia = {};
+  dados.forEach((r) => {
+    const data = paraDataISO(r[0]);
+    const bruto = parseValorBR(r[18]) || 0;
+    const liquido = parseValorBR(r[22]) || 0;
+    if (!data) return;
+    porDia[data] = (porDia[data] || 0) + (bruto - liquido);
+  });
+
+  return Object.entries(porDia)
+    .map(([data, valor]) => ({ data, valor: Math.round(valor * 100) / 100 }))
+    .filter((d) => d.valor > 0)
+    .sort((a, b) => a.data.localeCompare(b.data));
+}
+
 export function normalizarComMapeamento(linhasBrutas, mapeamento) {
   const dados = mapeamento.temCabecalho ? linhasBrutas.slice(1) : linhasBrutas;
   return dados

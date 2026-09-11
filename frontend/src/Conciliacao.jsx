@@ -12,13 +12,15 @@ import {
   parseBalancoSistema,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
+  calcularTaxasPagamentosPorDia,
+  calcularTaxasVendasPorDia,
   lerTextoArquivo,
   paraDataISO
 } from './conciliacao/parsers';
 import { conciliar } from './conciliacao/matching';
 import CategoriaSelect from './CategoriaSelect';
 
-const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null };
+const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null, taxaMaquininhaPorDia: null };
 
 const NOTAS_FORMATO = {
   'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
@@ -60,7 +62,7 @@ function normalizarDescricaoParaComparacao(descricao) {
     .trim();
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onDividirLancamento, onLancarFaturamentoBruto }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -98,19 +100,20 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
+  const [diasTaxaLancados, setDiasTaxaLancados] = useState(new Set());
 
   const atualizarFonte = (chave, patch) => {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
   };
 
-  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota, taxaMaquininha) => {
+  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota, taxaMaquininha, taxaMaquininhaPorDia) => {
     if (linhas.length === 0) {
       atualizarFonte(chave, {
         carregando: false,
         erro: `O arquivo "${nomeArquivo}" foi lido, mas não encontramos nenhum lançamento nele. Confira se é o arquivo certo e se o período selecionado não veio vazio.`
       });
     } else {
-      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null, taxaMaquininha: taxaMaquininha ?? null });
+      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null, taxaMaquininha: taxaMaquininha ?? null, taxaMaquininhaPorDia: taxaMaquininhaPorDia ?? null });
     }
   };
 
@@ -141,11 +144,13 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         } else if (formato === 'sicredi-pagamentos') {
           const linhas = parseSicrediPagamentos(bruto);
           const taxaMaquininha = calcularTaxasPagamentos(bruto);
-          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha);
+          const taxaMaquininhaPorDia = calcularTaxasPagamentosPorDia(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia);
         } else if (formato === 'sicredi-vendas') {
           const linhas = parseSicrediVendas(bruto);
           const taxaMaquininha = calcularTaxasVendas(bruto);
-          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha);
+          const taxaMaquininhaPorDia = calcularTaxasVendasPorDia(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia);
         } else if (formato === 'balanco-sistema') {
           const linhas = parseBalancoSistema(bruto);
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
@@ -287,6 +292,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // Prefere a taxa calculada a partir de Pagamentos (inclui antecipação); Vendas
     // só tem o desconto de MDR, então serve de estimativa quando só ele foi carregado.
     const taxaMaquininha = fontes.maquininha.taxaMaquininha ?? fontes.vendas.taxaMaquininha ?? null;
+    const taxaMaquininhaPorDia = fontes.maquininha.taxaMaquininhaPorDia ?? fontes.vendas.taxaMaquininhaPorDia ?? null;
 
     // Marca cada comanda do faturamento bruto com o que já foi confirmado: Pix
     // bate direto com uma linha do extrato (passo1); Cartão só dá pra conferir
@@ -328,12 +334,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         semCorrespondenciaSistema: passo4.semParB
       },
       taxaMaquininha,
+      taxaMaquininhaPorDia,
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
       paresPixExtratoSistema
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
+    setDiasTaxaLancados(new Set());
     setSelecionadosFaturamento(new Set());
     setCasamentoManual(null);
   };
@@ -390,6 +398,22 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setIgnorados((s) => {
       const novo = new Set(s);
       visiveis.forEach((l) => novo.add(l.id));
+      return novo;
+    });
+  };
+
+  const criarContaTaxaDiaria = (dia) => {
+    onCriarContasTaxaMaquininhaPorDia([dia]);
+    setDiasTaxaLancados((s) => new Set(s).add(dia.data));
+  };
+
+  const criarTodasContasTaxaDiarias = () => {
+    const pendentes = (resultado.taxaMaquininhaPorDia || []).filter((d) => !diasTaxaLancados.has(d.data));
+    if (pendentes.length === 0) return;
+    onCriarContasTaxaMaquininhaPorDia(pendentes);
+    setDiasTaxaLancados((s) => {
+      const novo = new Set(s);
+      pendentes.forEach((d) => novo.add(d.data));
       return novo;
     });
   };
@@ -1060,22 +1084,50 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               {renderTituloSecao('Taxas da Maquininha', 'taxaMaquininha')}
               {!secoesRecolhidas.has('taxaMaquininha') && (
               <>
-              <p className="nota-formato">
-                A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
-                Pra bater com o saldo do banco, lance esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
-              </p>
-              {taxaJaLancada ? (
-                <p className="nota-formato">✓ Conta a pagar criada — vai aparecer em "Contas em Aberto", pronta pra você pagar de qualquer conta.</p>
+              {resultado.taxaMaquininhaPorDia && resultado.taxaMaquininhaPorDia.length > 0 ? (
+                <>
+                <p className="nota-formato">
+                  A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
+                  Pra bater com o saldo do banco <strong>dia a dia</strong>, lance uma Conta a Pagar por dia, com vencimento no próprio dia em que a taxa foi descontada — em vez de um valor único.
+                </p>
+                <div className="acoes" style={{ marginBottom: 10 }}>
+                  <button onClick={criarTodasContasTaxaDiarias} className="btn-transferir">
+                    Criar Contas a Pagar Diárias de Todas as Taxas
+                  </button>
+                </div>
+                {resultado.taxaMaquininhaPorDia.map((dia) => (
+                  <div key={dia.data} className="item-conta">
+                    <span>{formatarDataBR(dia.data)} — {formatarMoeda(dia.valor)}</span>
+                    {diasTaxaLancados.has(dia.data) ? (
+                      <span className="nota-formato">✓ Criada</span>
+                    ) : (
+                      <button onClick={() => criarContaTaxaDiaria(dia)} className="btn-transferir">
+                        Criar Conta a Pagar
+                      </button>
+                    )}
+                  </div>
+                ))}
+                </>
               ) : (
-                <button
-                  onClick={() => {
-                    onCriarContaTaxaMaquininha(resultado.taxaMaquininha);
-                    setTaxaJaLancada(true);
-                  }}
-                  className="btn-transferir"
-                >
-                  Criar Conta a Pagar com esse valor
-                </button>
+                <>
+                <p className="nota-formato">
+                  A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
+                  Pra bater com o saldo do banco, lance esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
+                </p>
+                {taxaJaLancada ? (
+                  <p className="nota-formato">✓ Conta a pagar criada — vai aparecer em "Contas em Aberto", pronta pra você pagar de qualquer conta.</p>
+                ) : (
+                  <button
+                    onClick={() => {
+                      onCriarContaTaxaMaquininha(resultado.taxaMaquininha);
+                      setTaxaJaLancada(true);
+                    }}
+                    className="btn-transferir"
+                  >
+                    Criar Conta a Pagar com esse valor
+                  </button>
+                )}
+                </>
               )}
               </>
               )}
