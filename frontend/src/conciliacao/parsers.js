@@ -1,3 +1,14 @@
+// Importadas de forma estática (não com import() dinâmico) de propósito: um
+// import() dinâmico busca um arquivo separado, com nome de hash próprio, em
+// tempo de execução — se o app fizer um novo deploy enquanto a aba já está
+// aberta, esse arquivo antigo não existe mais no servidor e o upload falha
+// com "Failed to fetch dynamically imported module". Importando tudo aqui,
+// essas bibliotecas entram no mesmo pacote já carregado pela página.
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 // Exports de bancos e maquininhas brasileiras costumam vir em Windows-1252/Latin1,
 // não UTF-8 — arquivo.text() sempre assume UTF-8 e transforma todo acento em "�".
 // Lê como UTF-8 primeiro; se aparecer o caractere de substituição (sinal de bytes
@@ -138,13 +149,11 @@ export function parseCNAB240(texto) {
 }
 
 export async function parseCSVBruto(texto) {
-  const { default: Papa } = await import('papaparse');
   const resultado = Papa.parse(texto.trim(), { skipEmptyLines: true });
   return resultado.data;
 }
 
 export async function parseXLSXBruto(arrayBuffer) {
-  const XLSX = await import('xlsx');
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
@@ -466,9 +475,7 @@ export function normalizarComMapeamento(linhasBrutas, mapeamento) {
 }
 
 async function extrairLinhasPDF(arrayBuffer) {
-  const pdfjsLib = await import('pdfjs-dist');
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const linhas = [];

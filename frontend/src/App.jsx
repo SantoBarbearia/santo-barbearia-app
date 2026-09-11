@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import * as XLSX from 'xlsx';
 import Conciliacao from './Conciliacao';
 import Dashboard from './Dashboard';
 import CategoriaSelect from './CategoriaSelect';
@@ -386,8 +387,6 @@ export default function App() {
   // Gera uma planilha Excel com o resumo, as movimentações e as contas a pagar
   // do período/conta filtrados na Visão Geral, pra mandar pro contador.
   const handleExportarRelatorio = async () => {
-    const XLSX = await import('xlsx');
-
     // Formato "contábil" do Excel (símbolo de moeda alinhado à esquerda da
     // célula, valor à direita, negativos com sinal de menos antes do R$).
     const FORMATO_CONTABIL = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
