@@ -1268,18 +1268,22 @@ export default function App() {
                   <thead>
                     <tr>
                       <th>Conta</th>
+                      <th>Saldo Anterior</th>
                       <th>Entradas</th>
                       <th>Saídas</th>
-                      <th>Saldo</th>
+                      <th>Saldo do Período</th>
+                      <th>Saldo Final</th>
                     </tr>
                   </thead>
                   <tbody>
                     {saldoPorContaVG.map(linha => (
                       <tr key={linha.chave}>
                         <td>{linha.nome}</td>
+                        <td>R$ {linha.saldoAnterior.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         <td className="valor-entrada">R$ {linha.entradas.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         <td className="valor-saida">R$ {linha.saidas.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         <td>R$ {linha.saldo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td><strong>R$ {linha.saldoFinal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
                       </tr>
                     ))}
                   </tbody>
