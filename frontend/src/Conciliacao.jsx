@@ -67,6 +67,27 @@ function normalizarDescricaoParaComparacao(descricao) {
     .trim();
 }
 
+// Diferente de normalizarDescricaoParaComparacao (que apaga números de
+// propósito pra sugerir categoria por "tipo de lançamento"), esta MANTÉM os
+// números — é usada pra detectar se ela já lançou essa mesma comanda/dia
+// antes (ex: reconciliando o mesmo mês de novo), onde a data/hora dentro da
+// descrição é exatamente o que diferencia um lançamento do outro.
+function normalizarParaConferirDuplicata(descricao) {
+  return String(descricao || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// A movimentação salva guarda "<descrição original> (lançado da Conciliação)"
+// — então a descrição original é sempre um prefixo dela.
+function foiLancadoAntes(candidatos, descricaoOriginal, valor) {
+  const alvo = normalizarParaConferirDuplicata(descricaoOriginal);
+  return candidatos.some((c) => Math.abs(c.valor - valor) < 0.01 && c.normalizado.startsWith(alvo));
+}
+
 export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
@@ -303,9 +324,29 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       .map((m) => ({ id: `manual-mov-${m.id}`, data: paraDataISO(m.data), descricao: m.descricao, valor: m.valor, tipo: 'saida' }))
       .filter((m) => m.data && dentroDoPeriodoDoExtrato(m.data));
 
+    // Se ela reconciliar o mesmo período de novo (pra conferir algo, por
+    // exemplo) e clicar em "Lançar" de novo nesses três lugares — comanda,
+    // taxa por dia e recebimento em dinheiro —, sem checar contra o que já
+    // existe isso duplicaria a movimentação e inflaria o saldo (diferente do
+    // extrato, que já cruza com lancamentosManuaisEntrada/Saida acima). Guarda
+    // o que já foi lançado antes pra avisar e não deixar lançar nesses casos.
+    const creditosManuaisSicredi = (movimentacoes || [])
+      .filter((m) => m.tipo === 'Crédito Manual' && m.conta === 'sicredi')
+      .map((m) => ({ normalizado: normalizarParaConferirDuplicata(m.descricao), valor: m.valor }));
+    const creditosManuaisCaixa = (movimentacoes || [])
+      .filter((m) => m.tipo === 'Crédito Manual' && m.conta === 'caixa')
+      .map((m) => ({ normalizado: normalizarParaConferirDuplicata(m.descricao), valor: m.valor }));
+    const debitosTaxaMaquininhaSicredi = new Set(
+      (movimentacoes || [])
+        .filter((m) => m.tipo === 'Débito Manual' && m.conta === 'sicredi' && normalizarParaConferirDuplicata(m.descricao) === 'taxas da maquininha')
+        .map((m) => `${paraDataISO(m.data)}|${(Math.round(m.valor * 100) / 100).toFixed(2)}`)
+    );
+
     // Dinheiro não passa pelo banco nem pela maquininha — não tem com o que
     // conciliar, só precisa ser lançado no Caixa manualmente.
-    const recebimentosDinheiro = sistemaDinheiro.filter((l) => dentroDoPeriodoDoExtrato(l.data));
+    const recebimentosDinheiro = sistemaDinheiro
+      .filter((l) => dentroDoPeriodoDoExtrato(l.data))
+      .map((l) => ({ ...l, possivelDuplicata: foiLancadoAntes(creditosManuaisCaixa, l.descricao, l.valor) }));
 
     // Toda comanda do Sistema paga via Pix ou cartão (esteja ou não conciliada
     // com o extrato) — pra lançar o faturamento pelo valor BRUTO (o que o
@@ -327,7 +368,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // Prefere a taxa calculada a partir de Pagamentos (inclui antecipação); Vendas
     // só tem o desconto de MDR, então serve de estimativa quando só ele foi carregado.
     const taxaMaquininha = fontes.maquininha.taxaMaquininha ?? fontes.vendas.taxaMaquininha ?? null;
-    const taxaMaquininhaPorDia = fontes.maquininha.taxaMaquininhaPorDia ?? fontes.vendas.taxaMaquininhaPorDia ?? null;
+    const taxaMaquininhaPorDia = (fontes.maquininha.taxaMaquininhaPorDia ?? fontes.vendas.taxaMaquininhaPorDia ?? null)?.map((d) => ({
+      ...d,
+      possivelDuplicata: debitosTaxaMaquininhaSicredi.has(`${d.data}|${(Math.round(d.valor * 100) / 100).toFixed(2)}`)
+    })) ?? null;
 
     // Marca cada comanda do faturamento bruto com o que já foi confirmado: Pix
     // bate direto com uma linha do extrato (passo1); Cartão só dá pra conferir
@@ -364,7 +408,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true),
       dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
       ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
-      ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null
+      ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
+      possivelDuplicata: foiLancadoAntes(creditosManuaisSicredi, l.descricao, l.valorBruto)
     }));
 
     // Elo que faltava na cadeia do cartão: hoje o Sistema bate com Vendas
@@ -443,12 +488,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const lancarNoCaixa = (linha) => {
+    if (linha.possivelDuplicata && !window.confirm('Já existe um lançamento no Caixa muito parecido com esse (mesmo valor e descrição) — pode já ter sido lançado numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
     marcarIgnorado(linha.id);
   };
 
   const lancarFaturamentoBruto = (linha) => {
+    if (linha.possivelDuplicata && !window.confirm('Já existe uma Receita muito parecida com essa comanda (mesmo valor e descrição) na Conta Corrente — pode já ter sido lançada numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoria = categoriaPorLinha[linha.id] ?? sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarFaturamentoBruto([{ ...linha, categoria }]);
     marcarIgnorado(linha.id);
@@ -478,9 +525,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
 
   const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
     const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
-    const visiveisNaOrdem = apenasConfirmadas ? todasVisiveis.filter((l) => l.confirmadoNoBanco) : todasVisiveis;
+    const semDuplicatas = todasVisiveis.filter((l) => !l.possivelDuplicata);
+    const duplicatas = todasVisiveis.filter((l) => l.possivelDuplicata);
+    const visiveisNaOrdem = apenasConfirmadas ? semDuplicatas.filter((l) => l.confirmadoNoBanco) : semDuplicatas;
     const visiveis = ordenarComoNoBancoEnaMaquininha(visiveisNaOrdem);
-    if (visiveis.length === 0) return;
+    if (visiveis.length === 0) {
+      if (duplicatas.length > 0) alert(`Todas as comandas visíveis parecem já ter sido lançadas antes (mesmo valor e descrição já existem na Conta Corrente) — nada foi lançado de novo. Se alguma dessas realmente precisa ser lançada, use o botão "Lançar" dela individualmente.`);
+      return;
+    }
     const linhasComCategoria = visiveis.map((l) => ({
       ...l,
       categoria: categoriaPorLinha[l.id] ?? sugerirCategoriaPorHistorico(l.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO
@@ -491,22 +543,33 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       visiveis.forEach((l) => novo.add(l.id));
       return novo;
     });
+    if (duplicatas.length > 0) {
+      alert(`${duplicatas.length} comanda(s) ficaram de fora por já parecerem lançadas antes (mesmo valor e descrição já existem na Conta Corrente) — confira e use o botão "Lançar" de cada uma individualmente se precisar mesmo assim.`);
+    }
   };
 
   const criarContaTaxaDiaria = (dia) => {
+    if (dia.possivelDuplicata && !window.confirm('Já existe um débito de "Taxas da Maquininha" nesse mesmo dia e valor na Conta Corrente — pode já ter sido lançado numa conciliação anterior. Lançar mesmo assim?')) return;
     onCriarContasTaxaMaquininhaPorDia([dia]);
     setDiasTaxaLancados((s) => new Set(s).add(dia.data));
   };
 
   const criarTodasContasTaxaDiarias = () => {
-    const pendentes = (resultado.taxaMaquininhaPorDia || []).filter((d) => !diasTaxaLancados.has(d.data));
-    if (pendentes.length === 0) return;
+    const pendentes = (resultado.taxaMaquininhaPorDia || []).filter((d) => !diasTaxaLancados.has(d.data) && !d.possivelDuplicata);
+    const duplicatas = (resultado.taxaMaquininhaPorDia || []).filter((d) => !diasTaxaLancados.has(d.data) && d.possivelDuplicata);
+    if (pendentes.length === 0) {
+      if (duplicatas.length > 0) alert('Todos os dias visíveis parecem já ter sido lançados antes — nada foi lançado de novo.');
+      return;
+    }
     onCriarContasTaxaMaquininhaPorDia(pendentes);
     setDiasTaxaLancados((s) => {
       const novo = new Set(s);
       pendentes.forEach((d) => novo.add(d.data));
       return novo;
     });
+    if (duplicatas.length > 0) {
+      alert(`${duplicatas.length} dia(s) ficaram de fora por já parecerem lançados antes — confira e use o botão de cada dia individualmente se precisar mesmo assim.`);
+    }
   };
 
   const toggleSelecaoFaturamento = (id) => {
@@ -1056,6 +1119,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 ) : (
                   <span className="badge-categoria" style={{ color: '#c0862e' }}>⏳ Pendente {l.viaPix ? 'no extrato' : 'na maquininha'}</span>
                 )}
+                {l.possivelDuplicata && (
+                  <span className="badge-categoria" style={{ color: '#c0392b' }}> ⚠️ Parece já lançada antes</span>
+                )}
               </p>
               <p className="venc">
                 {formatarDataBR(l.data)}
@@ -1109,7 +1175,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         {visiveis.map((l) => (
           <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
             <div className="info-conta">
-              <p className="desc">{l.descricao} <span className="origem-tag">(Sistema)</span></p>
+              <p className="desc">
+                {l.descricao} <span className="origem-tag">(Sistema)</span>
+                {l.possivelDuplicata && (
+                  <span className="badge-categoria" style={{ color: '#c0392b' }}> ⚠️ Parece já lançada antes</span>
+                )}
+              </p>
               <p className="venc">{formatarDataBR(l.data)}</p>
             </div>
             <p className="valor-conta">{formatarMoeda(l.valor)}</p>
@@ -1322,7 +1393,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 </div>
                 {resultado.taxaMaquininhaPorDia.map((dia) => (
                   <div key={dia.data} className="item-conta">
-                    <span>{formatarDataBR(dia.data)} — {formatarMoeda(dia.valor)}</span>
+                    <span>
+                      {formatarDataBR(dia.data)} — {formatarMoeda(dia.valor)}
+                      {dia.possivelDuplicata && !diasTaxaLancados.has(dia.data) && (
+                        <span className="badge-categoria" style={{ color: '#c0392b' }}> ⚠️ Parece já lançada antes</span>
+                      )}
+                    </span>
                     {diasTaxaLancados.has(dia.data) ? (
                       <span className="nota-formato">✓ Lançada</span>
                     ) : (
