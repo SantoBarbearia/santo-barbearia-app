@@ -185,8 +185,6 @@ export default function App() {
 
     try {
       const salvarTudo = (async () => {
-        verificar(await supabase.from('contas').upsert([{ id: 1, ...dados.contas }]), 'contas');
-
         verificar(await supabase.from('contas_pagar').delete().neq('id', -1), 'contas a pagar');
         if (dados.contasAPagar.length > 0) {
           // dataPagamentoSelecionada é só um rascunho local (a data escolhida antes de
@@ -216,6 +214,15 @@ export default function App() {
         verificar(await supabase.from('categorias_contabeis').delete().neq('id', -1), 'classificações contábeis');
         if (dados.categorias.length > 0) {
           verificar(await supabase.from('categorias_contabeis').insert(dados.categorias), 'classificações contábeis');
+        }
+
+        // O saldo das contas só é salvo por último, e só se tudo mais acima deu
+        // certo — se alguma tabela (principalmente movimentações) falhar no meio
+        // do caminho, o saldo fica exatamente como estava antes, em vez de
+        // "andar sozinho" sem a movimentação que explica a mudança (o que já
+        // causou saldo fantasma quando uma tentativa anterior falhou por rede).
+        if (erros.length === 0) {
+          verificar(await supabase.from('contas').upsert([{ id: 1, ...dados.contas }]), 'contas');
         }
       })();
 
