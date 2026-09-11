@@ -945,7 +945,11 @@ export default function App() {
     let delta = 0;
     const novasMovs = [];
     linhas.forEach((linha, i) => {
-      const [ano, mes, dia] = linha.data.split('-');
+      // Pra cartão, usa a data em que o dinheiro realmente caiu na Conta
+      // Corrente (data de pagamento da maquininha), não o dia da venda — é
+      // isso que bate com o extrato e mantém a Visão Geral na mesma ordem do
+      // banco. Pix cai no mesmo dia, então usa a data da comanda mesmo.
+      const [ano, mes, dia] = (linha.dataPagamento || linha.data).split('-');
       const dataBR = `${dia}/${mes}/${ano}`;
       delta += linha.valorBruto;
       novasMovs.push({

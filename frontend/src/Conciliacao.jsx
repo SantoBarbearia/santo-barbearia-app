@@ -9,6 +9,7 @@ import {
   detectarFormatoConhecido,
   parseSicrediPagamentos,
   parseSicrediPagamentosDetalhado,
+  parseSicrediPagamentosComoVendas,
   parseSicrediVendas,
   ligarVendasComPagamentos,
   parseBalancoSistema,
@@ -23,10 +24,10 @@ import {
 import { conciliar } from './conciliacao/matching';
 import CategoriaSelect from './CategoriaSelect';
 
-const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null, taxaMaquininhaPorDia: null, pagamentosDetalhado: null };
+const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null, taxaMaquininhaPorDia: null, pagamentosDetalhado: null, vendasDerivadas: null };
 
 const NOTAS_FORMATO = {
-  'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
+  'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato. Esse relatório já traz tudo que o de Vendas traria (e mais a data de pagamento) — não precisa subir o Relatório de Vendas também, a não ser que queira uma conferência extra por Código de Autorização.',
   'sicredi-vendas': 'Relatório de Vendas da Sicredi reconhecido: uma linha por venda (valor bruto, antes do desconto da maquininha), pra conferir com o Sistema.',
   'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.',
   'sistema-movimentacoes': 'Relatório de Movimentações do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas). Esse relatório não traz a taxa da maquininha por comanda — use "Vendas × Pagamentos da Maquininha" pra conferir a taxa real de cada venda no cartão.'
@@ -159,6 +160,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           const taxaMaquininha = calcularTaxasPagamentos(bruto);
           const taxaMaquininhaPorDia = calcularTaxasPagamentosPorDia(bruto);
           const pagamentosDetalhado = parseSicrediPagamentosDetalhado(bruto);
+          // O relatório de Pagamentos já traz tudo que o relatório de Vendas traria
+          // (e mais: a data de pagamento) — reconstruímos as vendas a partir dele,
+          // pra ela não precisar subir os dois relatórios da maquininha.
+          const vendasDerivadas = parseSicrediPagamentosComoVendas(bruto);
+          atualizarFonte(chave, { vendasDerivadas });
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia, pagamentosDetalhado);
         } else if (formato === 'sicredi-vendas') {
           const linhas = parseSicrediVendas(bruto);
@@ -241,7 +247,16 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const sistemaCartao = fontes.sistema.linhas.filter((l) => l.viaCartao === true);
     const sistemaDinheiro = fontes.sistema.linhas.filter((l) => l.viaDinheiro === true);
     const maquininha = fontes.maquininha.linhas;
-    const vendas = fontes.vendas.linhas;
+    // O relatório de Pagamentos já traz Data da venda/Hora da venda e Valor
+    // bruto/líquido de cada liquidação — se o Relatório de Vendas separado não
+    // foi carregado, usamos as vendas reconstruídas a partir do de Pagamentos
+    // (já vêm com dataPagamento/valorLiquidoReal prontos). Se ela carregou o
+    // de Vendas mesmo assim (pra conferência extra por Código de Autorização),
+    // ligamos os dois pelo código.
+    const vendasDeArquivoSeparado = fontes.vendas.linhas.length > 0;
+    const vendas = vendasDeArquivoSeparado
+      ? ligarVendasComPagamentos(fontes.vendas.linhas, fontes.maquininha.pagamentosDetalhado || [])
+      : (fontes.maquininha.vendasDerivadas || []);
 
     // O extrato define o período sendo conciliado — um lançamento (manual ou
     // conta paga) de outro mês não pode aparecer como "divergência" só porque
@@ -326,19 +341,41 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // quando duas comandas do mesmo valor caem perto uma da outra), a gente
     // sabe qual comanda desconfirmar.
     const paresPixExtratoSistema = passo1.pares.map((p) => ({ extratoId: p.a.id, sistemaId: p.b.id }));
+
+    // Pra lançar a comanda na data em que o dinheiro realmente caiu na Conta
+    // Corrente (não a data da venda) e, na Visão Geral, manter a mesma ordem
+    // do extrato/relatório de pagamento entre lançamentos do mesmo dia: guarda
+    // a posição de cada linha do extrato e, pro cartão, a data de pagamento +
+    // posição no relatório de Pagamentos de cada venda casada (passo4).
+    const extratoOrdemPorId = new Map(fontes.extrato.linhas.map((l, i) => [l.id, i]));
+    const ordemExtratoPorSistemaId = new Map(
+      paresPixExtratoSistema
+        .map((p) => [p.sistemaId, extratoOrdemPorId.get(p.extratoId)])
+        .filter(([, ordem]) => ordem !== undefined)
+    );
+    const dataPagamentoPorSistemaId = new Map(
+      passo4.pares.filter((p) => p.a.dataPagamento).map((p) => [p.b.id, p.a.dataPagamento])
+    );
+    const ordemPagamentoPorSistemaId = new Map(
+      passo4.pares.filter((p) => p.a.ordemPagamento !== undefined && p.a.ordemPagamento !== null).map((p) => [p.b.id, p.a.ordemPagamento])
+    );
     const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
       ...l,
-      confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)
+      confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true),
+      dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
+      ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
+      ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null
     }));
 
     // Elo que faltava na cadeia do cartão: hoje o Sistema bate com Vendas
     // (passo4, por valor+data) e o Extrato bate com Pagamentos agrupado por
     // dia (passo2, também por valor+data) — mas nada confere se AQUELA venda
     // específica realmente tem uma liquidação correspondente no relatório de
-    // Pagamentos. Como os dois relatórios compartilham o "Código de
-    // autorização", dá pra ligar direto (chave exata) em vez de confiar só em
-    // valor+data duas vezes.
-    const vendasComPagamento = ligarVendasComPagamentos(vendas, fontes.maquininha.pagamentosDetalhado || []);
+    // Pagamentos. Quando ela subiu o Relatório de Vendas separado, "vendas" já
+    // veio ligado ao de Pagamentos pelo Código de Autorização, lá em cima;
+    // quando não subiu, "vendas" já é a lista reconstruída a partir do próprio
+    // relatório de Pagamentos, então toda venda conta como confirmada.
+    const vendasComPagamento = vendas;
 
     setResultado({
       recebimentos: {
@@ -367,7 +404,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
       paresPixExtratoSistema,
-      vendasComPagamento
+      vendasComPagamento,
+      vendasDeArquivoSeparado
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -416,9 +454,32 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     marcarIgnorado(linha.id);
   };
 
+  // Lançar todas de uma vez cria os IDs em sequência (ver handleLancarFaturamentoBruto
+  // no App.jsx), e a Visão Geral mostra as mais recentes primeiro, desempatando
+  // lançamentos do mesmo dia pelo ID (maior ID aparece mais acima). Pra ela ver, dentro
+  // de um mesmo dia, a mesma ordem do extrato (Pix) e depois do relatório de Pagamentos
+  // (cartão) de cima pra baixo, quem aparece primeiro no extrato/relatório precisa
+  // receber o ID maior — ou seja, precisa ser lançado por último. Por isso ordenamos
+  // aqui do ÚLTIMO pro PRIMEIRO (ordem decrescente): o primeiro da lista real vai pro
+  // fim da fila de lançamento e sai com o ID mais alto do grupo.
+  const ordenarComoNoBancoEnaMaquininha = (lista) => {
+    return [...lista].sort((a, b) => {
+      const dataA = a.dataPagamento || a.data || '';
+      const dataB = b.dataPagamento || b.data || '';
+      if (dataA !== dataB) return dataA < dataB ? -1 : 1;
+      const ordemExtratoA = a.ordemExtrato ?? -Infinity;
+      const ordemExtratoB = b.ordemExtrato ?? -Infinity;
+      if (ordemExtratoA !== ordemExtratoB) return ordemExtratoB - ordemExtratoA;
+      const ordemPagamentoA = a.ordemPagamento ?? -Infinity;
+      const ordemPagamentoB = b.ordemPagamento ?? -Infinity;
+      return ordemPagamentoB - ordemPagamentoA;
+    });
+  };
+
   const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
     const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
-    const visiveis = apenasConfirmadas ? todasVisiveis.filter((l) => l.confirmadoNoBanco) : todasVisiveis;
+    const visiveisNaOrdem = apenasConfirmadas ? todasVisiveis.filter((l) => l.confirmadoNoBanco) : todasVisiveis;
+    const visiveis = ordenarComoNoBancoEnaMaquininha(visiveisNaOrdem);
     if (visiveis.length === 0) return;
     const linhasComCategoria = visiveis.map((l) => ({
       ...l,
@@ -938,7 +999,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           Essas comandas do Sistema (Pix e Cartão) ainda não viraram Receita no app — mesmo as que já conciliaram com o extrato. Cada uma lança o valor BRUTO (o que o cliente pagou) como Receita e, quando teve taxa de maquininha, a taxa entra separada como Despesa — o efeito no saldo da Conta Corrente é igual ao valor líquido que realmente caiu no banco.
         </p>
         <p className="nota-formato">
-          <strong>✓ Confirmado</strong> = essa comanda já bateu com o extrato (Pix) ou com o Relatório de Vendas da maquininha (Cartão). <strong>⏳ Pendente</strong> = o Cash Barber diz que foi pago, mas ainda não achamos correspondência no banco/maquininha nesse período — pode ser só atraso de compensação, vale conferir antes de lançar.
+          <strong>✓ Confirmado</strong> = essa comanda já bateu com o extrato (Pix) ou com as vendas da maquininha, seja do Relatório de Vendas separado ou reconstruídas a partir do de Pagamentos (Cartão). <strong>⏳ Pendente</strong> = o Cash Barber diz que foi pago, mas ainda não achamos correspondência no banco/maquininha nesse período — pode ser só atraso de compensação, vale conferir antes de lançar.
         </p>
         <div className="resumo-grid">
           <div className="resumo-item">
@@ -1184,7 +1245,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             </div>
           )}
 
-          {resultado.vendasComPagamento && resultado.vendasComPagamento.length > 0 && (
+          {resultado.vendasDeArquivoSeparado && resultado.vendasComPagamento && resultado.vendasComPagamento.length > 0 && (
             <div className="card">
               {renderTituloSecao('Vendas × Pagamentos da Maquininha (Código de Autorização)', 'vendasPagamentos')}
               {!secoesRecolhidas.has('vendasPagamentos') && (

@@ -244,14 +244,18 @@ export function parseSicrediPagamentosDetalhado(linhas) {
   const colCodigo = encontrarColuna(linhas[idxCabecalho], 'Código de autorização');
   const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
 
+  // "ordem" guarda a posição da linha no relatório (a Sicredi exporta em
+  // ordem cronológica) — usado só pra desempatar a ordem de exibição na
+  // Visão Geral quando duas vendas caem na mesma data de pagamento.
   return dados
-    .map((r) => ({
+    .map((r, i) => ({
       id: novoId('pagdet'),
       data: paraDataISO(r[0]),
       codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
       bandeira: r[15],
       valorBruto: parseValorBR(r[18]) || 0,
-      valorLiquido: parseValorBR(r[22]) || 0
+      valorLiquido: parseValorBR(r[22]) || 0,
+      ordem: i
     }))
     .filter((r) => r.data && r.codigoAutorizacao);
 }
@@ -272,7 +276,7 @@ export function ligarVendasComPagamentos(vendas, pagamentosDetalhado) {
   return vendas.map((v) => {
     const pagamentos = (v.codigoAutorizacao && porCodigo[v.codigoAutorizacao]) || [];
     if (pagamentos.length === 0) {
-      return { ...v, encontradoEmPagamentos: false, valorBrutoPago: null, valorLiquidoReal: null, taxaReal: null };
+      return { ...v, encontradoEmPagamentos: false, valorBrutoPago: null, valorLiquidoReal: null, taxaReal: null, dataPagamento: null, ordemPagamento: null };
     }
     const valorBrutoPago = Math.round(pagamentos.reduce((s, p) => s + p.valorBruto, 0) * 100) / 100;
     const valorLiquidoReal = Math.round(pagamentos.reduce((s, p) => s + p.valorLiquido, 0) * 100) / 100;
@@ -281,9 +285,66 @@ export function ligarVendasComPagamentos(vendas, pagamentosDetalhado) {
       encontradoEmPagamentos: true,
       valorBrutoPago,
       valorLiquidoReal,
-      taxaReal: Math.round((valorBrutoPago - valorLiquidoReal) * 100) / 100
+      taxaReal: Math.round((valorBrutoPago - valorLiquidoReal) * 100) / 100,
+      // Data em que o dinheiro realmente caiu na Conta Corrente (pode ser
+      // diferente do dia da venda) — quando uma venda parcelada tem parcelas
+      // liquidadas em dias diferentes, fica a data da primeira liquidação
+      // encontrada, só como referência.
+      dataPagamento: pagamentos[0].data,
+      ordemPagamento: pagamentos[0].ordem
     };
   });
+}
+
+// O Relatório de Pagamentos já traz Data da venda/Hora da venda, Valor bruto
+// e Valor líquido de cada liquidação — dá pra reconstruir uma "venda" por
+// comanda direto dele, sem precisar do Relatório de Vendas separado (que só
+// repete o valor bruto, sem trazer a data de pagamento). Uma venda parcelada
+// pode ter várias linhas (uma por parcela/liquidação, com o mesmo "Código de
+// autorização"); somamos os valores líquidos de todas.
+export function parseSicrediPagamentosComoVendas(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data de pagamento');
+  if (idxCabecalho === -1) return [];
+  const colCodigo = encontrarColuna(linhas[idxCabecalho], 'Código de autorização');
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  const porChave = new Map();
+  dados.forEach((r, i) => {
+    const codigoAutorizacao = colCodigo !== -1 ? String(r[colCodigo] || '').trim() : '';
+    const comprovante = String(r[8] || '').trim();
+    const chave = codigoAutorizacao || comprovante;
+    if (!chave) return;
+
+    const dataVenda = paraDataISO(r[3]);
+    const valorBruto = parseValorBR(r[17]);
+    if (!dataVenda || !(valorBruto > 0)) return;
+
+    if (!porChave.has(chave)) {
+      const horaMatch = String(r[4] || '').match(/^(\d{2}:\d{2})/);
+      porChave.set(chave, {
+        id: novoId('venda'),
+        data: dataVenda,
+        dataHora: horaMatch ? `${dataVenda}T${horaMatch[1]}:00` : null,
+        descricao: `Venda no cartão - ${r[15]}`,
+        valor: Math.round(valorBruto * 100) / 100,
+        codigoAutorizacao: codigoAutorizacao || null,
+        tipo: 'entrada',
+        encontradoEmPagamentos: true,
+        dataPagamento: paraDataISO(r[0]),
+        ordemPagamento: i,
+        valorBrutoPago: 0,
+        valorLiquidoReal: 0
+      });
+    }
+    const v = porChave.get(chave);
+    v.valorBrutoPago = Math.round((v.valorBrutoPago + (parseValorBR(r[18]) || 0)) * 100) / 100;
+    v.valorLiquidoReal = Math.round((v.valorLiquidoReal + (parseValorBR(r[22]) || 0)) * 100) / 100;
+  });
+
+  return Array.from(porChave.values()).map((v) => ({
+    ...v,
+    taxaReal: Math.round((v.valorBrutoPago - v.valorLiquidoReal) * 100) / 100
+  }));
 }
 
 // Exportação do sistema (balanço): mistura recebimentos, pagamentos e linhas de
