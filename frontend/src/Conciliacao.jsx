@@ -8,7 +8,9 @@ import {
   parsePDF,
   detectarFormatoConhecido,
   parseSicrediPagamentos,
+  parseSicrediPagamentosDetalhado,
   parseSicrediVendas,
+  ligarVendasComPagamentos,
   parseBalancoSistema,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
@@ -20,7 +22,7 @@ import {
 import { conciliar } from './conciliacao/matching';
 import CategoriaSelect from './CategoriaSelect';
 
-const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null, taxaMaquininhaPorDia: null };
+const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, nota: null, taxaMaquininha: null, taxaMaquininhaPorDia: null, pagamentosDetalhado: null };
 
 const NOTAS_FORMATO = {
   'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
@@ -107,14 +109,22 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
   };
 
-  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota, taxaMaquininha, taxaMaquininhaPorDia) => {
+  const finalizarComLinhas = (chave, linhas, nomeArquivo, nota, taxaMaquininha, taxaMaquininhaPorDia, pagamentosDetalhado) => {
     if (linhas.length === 0) {
       atualizarFonte(chave, {
         carregando: false,
         erro: `O arquivo "${nomeArquivo}" foi lido, mas não encontramos nenhum lançamento nele. Confira se é o arquivo certo e se o período selecionado não veio vazio.`
       });
     } else {
-      atualizarFonte(chave, { linhas, arquivo: nomeArquivo, carregando: false, nota: nota || null, taxaMaquininha: taxaMaquininha ?? null, taxaMaquininhaPorDia: taxaMaquininhaPorDia ?? null });
+      atualizarFonte(chave, {
+        linhas,
+        arquivo: nomeArquivo,
+        carregando: false,
+        nota: nota || null,
+        taxaMaquininha: taxaMaquininha ?? null,
+        taxaMaquininhaPorDia: taxaMaquininhaPorDia ?? null,
+        pagamentosDetalhado: pagamentosDetalhado ?? null
+      });
     }
   };
 
@@ -146,7 +156,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           const linhas = parseSicrediPagamentos(bruto);
           const taxaMaquininha = calcularTaxasPagamentos(bruto);
           const taxaMaquininhaPorDia = calcularTaxasPagamentosPorDia(bruto);
-          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia);
+          const pagamentosDetalhado = parseSicrediPagamentosDetalhado(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia, pagamentosDetalhado);
         } else if (formato === 'sicredi-vendas') {
           const linhas = parseSicrediVendas(bruto);
           const taxaMaquininha = calcularTaxasVendas(bruto);
@@ -312,6 +323,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)
     }));
 
+    // Elo que faltava na cadeia do cartão: hoje o Sistema bate com Vendas
+    // (passo4, por valor+data) e o Extrato bate com Pagamentos agrupado por
+    // dia (passo2, também por valor+data) — mas nada confere se AQUELA venda
+    // específica realmente tem uma liquidação correspondente no relatório de
+    // Pagamentos. Como os dois relatórios compartilham o "Código de
+    // autorização", dá pra ligar direto (chave exata) em vez de confiar só em
+    // valor+data duas vezes.
+    const vendasComPagamento = ligarVendasComPagamentos(vendas, fontes.maquininha.pagamentosDetalhado || []);
+
     setResultado({
       recebimentos: {
         conciliadoSistema: passo1.pares.length,
@@ -338,7 +358,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       taxaMaquininhaPorDia,
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
-      paresPixExtratoSistema
+      paresPixExtratoSistema,
+      vendasComPagamento
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -471,6 +492,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setMostrarJaCasados(false);
   };
 
+  // Mesma mecânica, pra uma Venda que não achou correspondência automática no
+  // relatório de Pagamentos (pelo Código de Autorização) — deixa escolher
+  // manualmente qual(is) linha(s) do Pagamentos formam aquela venda.
+  const iniciarCasamentoDeVenda = (vendaId) => {
+    setCasamentoManual((c) => (c?.lado === 'venda' && c.id === vendaId ? null : { lado: 'venda', id: vendaId, selecionados: new Set() }));
+    setMostrarJaCasados(false);
+  };
+
   const cancelarCasamentoManual = () => { setCasamentoManual(null); setMostrarJaCasados(false); };
 
   const toggleCasamentoManual = (id) => {
@@ -514,7 +543,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       if (sistemaIdsParaDesconfirmar.size > 0) {
         alert('Atenção: uma ou mais linhas selecionadas já estavam casadas automaticamente com outra comanda — ela(s) voltaram a ficar "Pendente" pra você conferir com o que realmente bate.');
       }
-    } else {
+    } else if (casamentoManual.lado === 'extrato') {
       // O lançamento do extrato some da lista de pendências (não precisa
       // lançar ele direto); as comandas selecionadas ficam confirmadas.
       setResultado((r) => ({
@@ -524,6 +553,28 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         )
       }));
       setIgnorados((s) => new Set(s).add(casamentoManual.id));
+    } else if (casamentoManual.lado === 'venda') {
+      // A venda selecionada passa a contar como encontrada em Pagamentos, com
+      // o bruto/líquido/taxa reais somados das linhas escolhidas; essas linhas
+      // saem do estoque de candidatos (via "ignorados") pra não serem
+      // oferecidas de novo pra outra venda.
+      const pagamentosDetalhado = fontes.maquininha.pagamentosDetalhado || [];
+      const selecionados = pagamentosDetalhado.filter((p) => casamentoManual.selecionados.has(p.id));
+      const valorBrutoPago = Math.round(selecionados.reduce((s, p) => s + p.valorBruto, 0) * 100) / 100;
+      const valorLiquidoReal = Math.round(selecionados.reduce((s, p) => s + p.valorLiquido, 0) * 100) / 100;
+      setResultado((r) => ({
+        ...r,
+        vendasComPagamento: r.vendasComPagamento.map((v) =>
+          v.id === casamentoManual.id
+            ? { ...v, encontradoEmPagamentos: true, valorBrutoPago, valorLiquidoReal, taxaReal: Math.round((valorBrutoPago - valorLiquidoReal) * 100) / 100 }
+            : v
+        )
+      }));
+      setIgnorados((s) => {
+        const novo = new Set(s);
+        casamentoManual.selecionados.forEach((id) => novo.add(id));
+        return novo;
+      });
     }
     setCasamentoManual(null);
   };
@@ -1086,6 +1137,65 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 {resultado.vendasCartao.semCorrespondenciaVendas.filter(l => !ignorados.has(l.id)).length === 0 &&
                   resultado.vendasCartao.semCorrespondenciaSistema.filter(l => !ignorados.has(l.id)).length === 0 && (
                   <p>✅ Tudo conciliado.</p>
+                )}
+              </div>
+              </>
+              )}
+            </div>
+          )}
+
+          {resultado.vendasComPagamento && resultado.vendasComPagamento.length > 0 && (
+            <div className="card">
+              {renderTituloSecao('Vendas × Pagamentos da Maquininha (Código de Autorização)', 'vendasPagamentos')}
+              {!secoesRecolhidas.has('vendasPagamentos') && (
+              <>
+              <p className="upload-dica">
+                Liga cada venda ao pagamento correspondente pelo Código de Autorização — uma chave exata, não por valor e data — pra confirmar que aquela venda específica realmente foi liquidada pela maquininha, e não só que a soma do dia bateu com o extrato.
+              </p>
+              <div className="resumo-grid">
+                <div className="resumo-item">
+                  <p>Confirmadas</p>
+                  <p className="valor-resumo">{resultado.vendasComPagamento.filter((v) => v.encontradoEmPagamentos).length}</p>
+                </div>
+                <div className="resumo-item">
+                  <p>Sem correspondência</p>
+                  <p className="valor-resumo">{resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).length}</p>
+                </div>
+              </div>
+              <div style={{ marginTop: 15 }}>
+                {resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).length === 0 ? (
+                  <p>✅ Todas as vendas bateram com o relatório de Pagamentos.</p>
+                ) : (
+                  resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).map((v) => (
+                    <div key={v.id} className="divergencia-item divergencia-entrada">
+                      <div className="info-conta">
+                        <p className="desc">{v.descricao}</p>
+                        <p className="venc">
+                          {formatarDataBR(v.data)}
+                          {!v.codigoAutorizacao && ' — esse relatório de Vendas não trouxe Código de Autorização, não dá pra ligar automaticamente'}
+                        </p>
+                      </div>
+                      <p className="valor-conta">{formatarMoeda(v.valor)}</p>
+                      <div className="acoes">
+                        <button onClick={() => iniciarCasamentoDeVenda(v.id)} className="btn-editar">
+                          {casamentoManual?.lado === 'venda' && casamentoManual.id === v.id ? 'Cancelar Casamento' : 'Casar com Pagamentos'}
+                        </button>
+                        <button onClick={() => marcarIgnorado(v.id)} className="btn-editar">Ignorar</button>
+                      </div>
+                      {casamentoManual?.lado === 'venda' && casamentoManual.id === v.id &&
+                        (() => {
+                          const codigosUsados = new Set(
+                            resultado.vendasComPagamento
+                              .filter((x) => x.encontradoEmPagamentos && x.codigoAutorizacao)
+                              .map((x) => x.codigoAutorizacao)
+                          );
+                          const candidatos = (fontes.maquininha.pagamentosDetalhado || [])
+                            .filter((p) => !ignorados.has(p.id) && !codigosUsados.has(p.codigoAutorizacao))
+                            .map((p) => ({ ...p, descricao: `Pagamento ${p.bandeira || ''} — Cód. ${p.codigoAutorizacao}`.trim() }));
+                          return renderPainelCasamentoManual(v.valor, v.descricao, candidatos);
+                        })()}
+                    </div>
+                  ))
                 )}
               </div>
               </>
