@@ -74,7 +74,7 @@ export default function App() {
   const [movimentacoes, setMovimentacoes] = useState([]);
   const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
   const [editandoContaId, setEditandoContaId] = useState(null);
-  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
+  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '' });
   const [transferencia, setTransferencia] = useState({
     de: 'caixa',
     para: 'sicredi',
@@ -465,7 +465,7 @@ export default function App() {
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   };
 
-  const handlePagarConta = (id, contaSelecionada) => {
+  const handlePagarConta = (id, contaSelecionada, dataPagamentoISO) => {
     const conta = contasAPagar.find(c => c.id === id);
     if (!conta || !contaSelecionada) return;
 
@@ -475,10 +475,14 @@ export default function App() {
     };
 
     const agora = Date.now();
+    const [anoPag, mesPag, diaPag] = (dataPagamentoISO || new Date().toISOString().slice(0, 10)).split('-');
+    const dataPagamentoBR = `${diaPag}/${mesPag}/${anoPag}`;
 
-    let novasContasAPagar = contasAPagar.map(c =>
-      c.id === id ? { ...c, status: 'Pago', conta: contaSelecionada } : c
-    );
+    let novasContasAPagar = contasAPagar.map(c => {
+      if (c.id !== id) return c;
+      const { dataPagamentoSelecionada, ...resto } = c;
+      return { ...resto, status: 'Pago', conta: contaSelecionada, dataPagamento: dataPagamentoBR };
+    });
 
     if (conta.recorrente && conta.repeticoesRestantes > 0) {
       const outrasPagas = contasAPagar.filter(c =>
@@ -510,7 +514,7 @@ export default function App() {
 
     const novaMovimentacao = {
       id: agora + 1,
-      data: new Date().toLocaleDateString('pt-BR'),
+      data: dataPagamentoBR,
       tipo: 'Despesa Paga',
       descricao: conta.descricao,
       valor: conta.valor,
@@ -560,6 +564,11 @@ export default function App() {
 
   const handleIniciarEdicaoConta = (conta) => {
     const [dia, mes, ano] = conta.vencimento.split('/');
+    let dataPagamentoISO = '';
+    if (conta.dataPagamento) {
+      const [diaP, mesP, anoP] = conta.dataPagamento.split('/');
+      dataPagamentoISO = `${anoP}-${mesP}-${diaP}`;
+    }
     setEditandoContaId(conta.id);
     setContaEditando({
       descricao: conta.descricao,
@@ -567,20 +576,26 @@ export default function App() {
       vencimento: `${ano}-${mes}-${dia}`,
       categoria: conta.categoria || '',
       recorrente: !!conta.recorrente,
-      repeticoes: conta.repeticoesRestantes || ''
+      repeticoes: conta.repeticoesRestantes || '',
+      dataPagamento: dataPagamentoISO
     });
   };
 
   const handleCancelarEdicaoConta = () => {
     setEditandoContaId(null);
-    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
+    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '' });
   };
 
   const handleSalvarEdicaoConta = (id) => {
     if (!contaEditando.descricao.trim() || !(parseFloat(contaEditando.valor) > 0) || !contaEditando.vencimento) return;
 
+    const contaAtual = contasAPagar.find(c => c.id === id);
     const [ano, mes, dia] = contaEditando.vencimento.split('-');
     const recorrente = !!contaEditando.recorrente;
+    const dataPagamentoBR = contaEditando.dataPagamento
+      ? (([anoP, mesP, diaP]) => `${diaP}/${mesP}/${anoP}`)(contaEditando.dataPagamento.split('-'))
+      : contaAtual?.dataPagamento;
+
     const novasContasAPagar = contasAPagar.map(c => c.id === id ? {
       ...c,
       descricao: capitalizarTexto(contaEditando.descricao.trim()),
@@ -589,14 +604,21 @@ export default function App() {
       categoria: contaEditando.categoria,
       recorrente,
       grupoRecorrente: recorrente ? (c.grupoRecorrente || c.id) : c.grupoRecorrente,
-      repeticoesRestantes: recorrente ? (parseInt(contaEditando.repeticoes, 10) || 0) : 0
+      repeticoesRestantes: recorrente ? (parseInt(contaEditando.repeticoes, 10) || 0) : 0,
+      ...(c.status === 'Pago' ? { dataPagamento: dataPagamentoBR } : {})
     } : c);
 
-    setContasAPagar(novasContasAPagar);
-    setEditandoContaId(null);
-    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
+    const precisaAtualizarMovimentacao = contaAtual?.status === 'Pago' && dataPagamentoBR && dataPagamentoBR !== contaAtual.dataPagamento;
+    const novasMovimentacoes = precisaAtualizarMovimentacao
+      ? movimentacoes.map(m => m.contaPagarId === id ? { ...m, data: dataPagamentoBR } : m)
+      : movimentacoes;
 
-    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+    setContasAPagar(novasContasAPagar);
+    if (precisaAtualizarMovimentacao) setMovimentacoes(novasMovimentacoes);
+    setEditandoContaId(null);
+    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '' });
+
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
   const handleExcluirConta = (id) => {
@@ -947,6 +969,33 @@ export default function App() {
       repeticoesRestantes: 0
     };
     const novasContasAPagar = [...contasAPagar, novaConta];
+    setContasAPagar(novasContasAPagar);
+    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+  };
+
+  // Igual ao handleCriarContaTaxaMaquininha, mas uma Conta a Pagar por dia,
+  // com vencimento no dia real em que a taxa foi descontada — assim o saldo
+  // bate diariamente em vez de concentrar tudo "hoje".
+  const handleCriarContasTaxaMaquininhaPorDia = (dias) => {
+    const agora = Date.now();
+    const novasContas = dias.map((dia, i) => {
+      const [ano, mes, diaNum] = dia.data.split('-');
+      const dataBR = `${diaNum}/${mes}/${ano}`;
+      return {
+        id: agora + i,
+        data: dataBR,
+        descricao: 'Taxas da Maquininha',
+        valor: Math.round(dia.valor * 100) / 100,
+        vencimento: dataBR,
+        status: 'Aberto',
+        conta: '',
+        categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)',
+        recorrente: false,
+        grupoRecorrente: null,
+        repeticoesRestantes: 0
+      };
+    });
+    const novasContasAPagar = [...contasAPagar, ...novasContas];
     setContasAPagar(novasContasAPagar);
     salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
@@ -1415,6 +1464,16 @@ export default function App() {
                             onChange={(e) => setContaEditando({ ...contaEditando, vencimento: e.target.value })}
                           />
                         </div>
+                        {conta.status === 'Pago' && (
+                          <div className="input-group">
+                            <label>Data de Pagamento</label>
+                            <input
+                              type="date"
+                              value={contaEditando.dataPagamento}
+                              onChange={(e) => setContaEditando({ ...contaEditando, dataPagamento: e.target.value })}
+                            />
+                          </div>
+                        )}
                         <div className="input-group">
                           <label>Classificação Contábil</label>
                           <CategoriaSelect
@@ -1459,6 +1518,11 @@ export default function App() {
                       </div>
                       <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                       <div className="acoes">
+                        <input
+                          type="date"
+                          value={conta.dataPagamentoSelecionada || new Date().toISOString().slice(0, 10)}
+                          onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, dataPagamentoSelecionada: e.target.value } : c))}
+                        />
                         <select
                           value={conta.conta}
                           onChange={(e) => setContasAPagar(contasAPagar.map(c => c.id === conta.id ? { ...c, conta: e.target.value } : c))}
@@ -1469,7 +1533,7 @@ export default function App() {
                           ))}
                         </select>
                         <button
-                          onClick={() => handlePagarConta(conta.id, conta.conta)}
+                          onClick={() => handlePagarConta(conta.id, conta.conta, conta.dataPagamentoSelecionada || new Date().toISOString().slice(0, 10))}
                           disabled={!conta.conta || contas[conta.conta] < conta.valor}
                           className="btn-pagar"
                         >
@@ -1489,14 +1553,71 @@ export default function App() {
                   <table className="tabela">
                     <tbody>
                       {contasAPagarFiltradas.filter(c => c.status === 'Pago').map(conta => (
-                        <tr key={conta.id}>
-                          <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
-                          <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td>Pago com: {nomesContas[conta.conta] || '—'}</td>
-                          <td>
-                            <button onClick={() => handleDesfazerPagamento(conta.id)} className="btn-excluir">Desfazer</button>
-                          </td>
-                        </tr>
+                        editandoContaId === conta.id ? (
+                          <tr key={conta.id}>
+                            <td colSpan={5}>
+                              <div className="item-conta-editando">
+                                <div className="form-transferencia">
+                                  <div className="input-group">
+                                    <label>Descrição</label>
+                                    <input
+                                      type="text"
+                                      value={contaEditando.descricao}
+                                      onChange={(e) => setContaEditando({ ...contaEditando, descricao: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Valor</label>
+                                    <input
+                                      type="number"
+                                      value={contaEditando.valor}
+                                      onChange={(e) => setContaEditando({ ...contaEditando, valor: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Vencimento</label>
+                                    <input
+                                      type="date"
+                                      value={contaEditando.vencimento}
+                                      onChange={(e) => setContaEditando({ ...contaEditando, vencimento: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Data de Pagamento</label>
+                                    <input
+                                      type="date"
+                                      value={contaEditando.dataPagamento}
+                                      onChange={(e) => setContaEditando({ ...contaEditando, dataPagamento: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="input-group">
+                                    <label>Classificação Contábil</label>
+                                    <CategoriaSelect
+                                      categorias={categorias}
+                                      value={contaEditando.categoria}
+                                      onChange={(valor) => setContaEditando({ ...contaEditando, categoria: valor })}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="acoes">
+                                  <button onClick={() => handleSalvarEdicaoConta(conta.id)} className="btn-salvar">Salvar</button>
+                                  <button onClick={handleCancelarEdicaoConta} className="btn-cancelar">Cancelar</button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={conta.id}>
+                            <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
+                            <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td>Pago com: {nomesContas[conta.conta] || '—'}</td>
+                            <td>Pago em: {conta.dataPagamento || conta.data}</td>
+                            <td>
+                              <button onClick={() => handleIniciarEdicaoConta(conta)} className="btn-editar">Editar</button>
+                              <button onClick={() => handleDesfazerPagamento(conta.id)} className="btn-excluir">Desfazer</button>
+                            </td>
+                          </tr>
+                        )
                       ))}
                     </tbody>
                   </table>
@@ -1616,6 +1737,7 @@ export default function App() {
               onLancarFaturamentoBruto={handleLancarFaturamentoBruto}
               onLancarCaixa={handleLancarCaixa}
               onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
+              onCriarContasTaxaMaquininhaPorDia={handleCriarContasTaxaMaquininhaPorDia}
             />
           </div>
 
