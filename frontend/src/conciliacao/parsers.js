@@ -182,6 +182,7 @@ export function detectarFormatoConhecido(linhas) {
   const primeiraCelula = String(linhas[0]?.[0] || '').replace(/^﻿/, '').trim();
   const segundaCelula = String(linhas[0]?.[1] || '').trim();
   if (primeiraCelula === 'Tipo' && segundaCelula === 'Descrição') return 'balanco-sistema';
+  if (primeiraCelula === 'Cliente' && segundaCelula === 'Telefone') return 'sistema-movimentacoes';
 
   // Exportação em XLSX vem com linhas de título ("Relatório de Pagamentos.", período,
   // etc.) antes do cabeçalho; a exportação em CSV às vezes começa direto no cabeçalho.
@@ -353,6 +354,59 @@ export function parseBalancoSistema(linhas) {
       valorBruto: valor,
       valorLiquido: Math.round((valor - taxa) * 100) / 100,
       taxa,
+      tipo: 'entrada',
+      viaPix,
+      viaCartao,
+      viaDinheiro
+    });
+  }
+
+  return registros;
+}
+
+// Relatório de Movimentações do Cash Barber: uma linha por pagamento já
+// concluído (Cliente, Telefone, Forma de pgto, Valor, Data com hora) — mais
+// simples que o Balanço, mas sem a linha separada da "Taxa do pagamento da
+// comanda", então taxa por comanda não dá pra calcular a partir daqui (a
+// fonte mais precisa de taxa continua sendo o Relatório de Pagamentos da
+// Sicredi, usado em "Vendas × Pagamentos da Maquininha"). Monta a descrição
+// no mesmo formato "Comanda Fulano - dd/mm/aaaa HH:MM" do Balanço pra
+// continuar funcionando com o resto da conciliação (nome, horário) sem
+// precisar mudar mais nada.
+export function parseMovimentacoesSistema(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Cliente');
+  const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
+
+  const registros = [];
+
+  for (let i = inicio; i < linhas.length; i++) {
+    const r = linhas[i];
+    const cliente = String(r[0] || '').trim();
+    if (!cliente) continue;
+
+    const formaPagamento = String(r[2] || '').trim();
+    const viaPix = /^pix/i.test(formaPagamento);
+    const viaCartao = /crédito|débito|cartão/i.test(formaPagamento);
+    const viaDinheiro = /dinheiro/i.test(formaPagamento);
+    if (!viaPix && !viaCartao && !viaDinheiro) continue;
+
+    const valor = parseValorBR(r[3]);
+    if (!(valor > 0)) continue;
+
+    const dataHoraMatch = String(r[4] || '').match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+    if (!dataHoraMatch) continue;
+    const data = paraDataISO(dataHoraMatch[1]);
+    if (!data) continue;
+
+    registros.push({
+      id: novoId('sis'),
+      data,
+      dataHora: `${data}T${dataHoraMatch[2]}:00`,
+      descricao: `Comanda ${cliente} - ${dataHoraMatch[1]} ${dataHoraMatch[2]}`,
+      valor,
+      valorBruto: valor,
+      valorLiquido: valor,
+      taxa: 0,
       tipo: 'entrada',
       viaPix,
       viaCartao,
