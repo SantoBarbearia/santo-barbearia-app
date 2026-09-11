@@ -553,14 +553,37 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       }
     } else if (casamentoManual.lado === 'extrato') {
       // O lançamento do extrato some da lista de pendências (não precisa
-      // lançar ele direto); as comandas selecionadas ficam confirmadas.
+      // lançar ele direto); as comandas selecionadas ficam confirmadas. Se
+      // alguma comanda selecionada já estava casada automaticamente com
+      // OUTRO lançamento do extrato (Pix de mesmo valor, comum com preços
+      // fechados), esse outro lançamento volta a aparecer como "sem
+      // correspondência", porque a comanda dele na verdade é essa que a
+      // Fernanda escolheu agora.
+      const paresPix = resultado.paresPixExtratoSistema || [];
+      const extratoIdsParaLiberar = [...casamentoManual.selecionados]
+        .map((sistemaId) => paresPix.find((p) => p.sistemaId === sistemaId)?.extratoId)
+        .filter((id) => id && id !== casamentoManual.id);
+      const linhasLiberadas = extratoIdsParaLiberar
+        .map((id) => (fontes.extrato.linhas || []).find((l) => l.id === id))
+        .filter(Boolean);
+
       setResultado((r) => ({
         ...r,
         faturamentoBrutoSistema: r.faturamentoBrutoSistema.map((x) =>
           casamentoManual.selecionados.has(x.id) ? { ...x, confirmadoNoBanco: true } : x
-        )
+        ),
+        recebimentos: {
+          ...r.recebimentos,
+          semCorrespondenciaExtrato: [
+            ...r.recebimentos.semCorrespondenciaExtrato,
+            ...linhasLiberadas.filter((l) => !r.recebimentos.semCorrespondenciaExtrato.some((x) => x.id === l.id))
+          ]
+        }
       }));
       setIgnorados((s) => new Set(s).add(casamentoManual.id));
+      if (linhasLiberadas.length > 0) {
+        alert('Atenção: uma ou mais comandas selecionadas já estavam casadas automaticamente com outro lançamento do extrato — ele(s) voltaram a aparecer como "sem correspondência" pra você conferir com o que realmente bate.');
+      }
     } else if (casamentoManual.lado === 'venda') {
       // A venda selecionada passa a contar como encontrada em Pagamentos, com
       // o bruto/líquido/taxa reais somados das linhas escolhidas; essas linhas
@@ -598,9 +621,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         </p>
         {ocultos > 0 && (
           <p className="nota-formato">
-            {ocultos} lançamento(s) que já casaram automaticamente com outra comanda não aparecem aqui.{' '}
+            {ocultos} lançamento(s) que já bateram com outra coisa não aparecem aqui.{' '}
             <button onClick={() => setMostrarJaCasados(true)} className="btn-editar" style={{ padding: '2px 8px' }}>
-              Mostrar mesmo assim (caso algum esteja casado com a comanda errada)
+              Mostrar mesmo assim (caso algum esteja casado com o lançamento errado)
             </button>
           </p>
         )}
@@ -611,6 +634,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             const outraComanda = c.usadoPorSistemaId
               ? (resultado.faturamentoBrutoSistema || []).find((x) => x.id === c.usadoPorSistemaId)
               : null;
+            const jaConfirmada = !outraComanda && c.confirmadoNoBanco === true;
             return (
               <div key={c.id} className="item-conta" style={{ padding: 8, marginBottom: 6 }}>
                 <input
@@ -624,6 +648,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                     {c.descricao}
                     {outraComanda && (
                       <span style={{ color: '#c0862e' }}> — já casado automaticamente com "{outraComanda.descricao}"; selecionar aqui libera ela de novo</span>
+                    )}
+                    {jaConfirmada && (
+                      <span style={{ color: '#c0862e' }}> — já confirmada com outro lançamento do extrato; selecionar aqui libera ele de novo</span>
                     )}
                   </p>
                   <p className="venc">{formatarDataBR(c.data)}</p>
@@ -830,7 +857,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'extrato' && casamentoManual.id === l.id &&
-              renderPainelCasamentoManual(l.valor, l.descricao, (resultado.faturamentoBrutoSistema || []).filter((c) => !c.confirmadoNoBanco && !ignorados.has(c.id)))}
+              (() => {
+                const todos = (resultado.faturamentoBrutoSistema || []).filter((c) => !ignorados.has(c.id));
+                const visiveis = mostrarJaCasados ? todos : todos.filter((c) => !c.confirmadoNoBanco);
+                const ocultos = todos.length - visiveis.length;
+                return renderPainelCasamentoManual(l.valor, l.descricao, visiveis, ocultos);
+              })()}
             {dividindo === l.id && (() => {
               const somaCentavos = Math.round(partesDivisao.reduce((s, p) => s + (parseFloat(p.valor) || 0), 0) * 100);
               const totalCentavos = Math.round(l.valor * 100);
