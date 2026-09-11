@@ -12,6 +12,7 @@ import {
   parseSicrediVendas,
   ligarVendasComPagamentos,
   parseBalancoSistema,
+  parseMovimentacoesSistema,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
   calcularTaxasPagamentosPorDia,
@@ -27,7 +28,8 @@ const FONTE_VAZIA = { linhas: [], arquivo: null, carregando: false, erro: null, 
 const NOTAS_FORMATO = {
   'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato.',
   'sicredi-vendas': 'Relatório de Vendas da Sicredi reconhecido: uma linha por venda (valor bruto, antes do desconto da maquininha), pra conferir com o Sistema.',
-  'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.'
+  'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.',
+  'sistema-movimentacoes': 'Relatório de Movimentações do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas). Esse relatório não traz a taxa da maquininha por comanda — use "Vendas × Pagamentos da Maquininha" pra conferir a taxa real de cada venda no cartão.'
 };
 
 const LABELS_FONTE = {
@@ -165,6 +167,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato], taxaMaquininha, taxaMaquininhaPorDia);
         } else if (formato === 'balanco-sistema') {
           const linhas = parseBalancoSistema(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
+        } else if (formato === 'sistema-movimentacoes') {
+          const linhas = parseMovimentacoesSistema(bruto);
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else {
           atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
