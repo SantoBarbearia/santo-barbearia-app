@@ -973,53 +973,54 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
-  // Cria a Conta a Pagar da taxa da maquininha direto a partir do resultado
-  // da Conciliação, sem precisar digitar nada — só falta pagar de alguma conta.
+  // A taxa da maquininha não é uma conta que fica em aberto esperando
+  // pagamento — ela já é descontada pela própria maquininha antes do
+  // dinheiro cair na Conta Corrente (o que chega no banco já é o valor
+  // líquido). Por isso vai direto como um Débito Manual na Conta Corrente,
+  // já "pago", em vez de virar uma Conta a Pagar em aberto.
   const handleCriarContaTaxaMaquininha = (valor) => {
     const hoje = new Date().toLocaleDateString('pt-BR');
-    const novaConta = {
+    const valorArredondado = Math.round(valor * 100) / 100;
+    const novasContas = { ...contas, sicredi: contas.sicredi - valorArredondado };
+    const novaMovimentacao = {
       id: Date.now(),
       data: hoje,
+      tipo: 'Débito Manual',
       descricao: 'Taxas da Maquininha',
-      valor: Math.round(valor * 100) / 100,
-      vencimento: hoje,
-      status: 'Aberto',
-      conta: '',
-      categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)',
-      recorrente: false,
-      grupoRecorrente: null,
-      repeticoesRestantes: 0
+      valor: valorArredondado,
+      conta: 'sicredi',
+      categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)'
     };
-    const novasContasAPagar = [...contasAPagar, novaConta];
-    setContasAPagar(novasContasAPagar);
-    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+    const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
-  // Igual ao handleCriarContaTaxaMaquininha, mas uma Conta a Pagar por dia,
-  // com vencimento no dia real em que a taxa foi descontada — assim o saldo
+  // Igual ao handleCriarContaTaxaMaquininha, mas um lançamento por dia, na
+  // data real em que a taxa foi descontada — assim o saldo da Conta Corrente
   // bate diariamente em vez de concentrar tudo "hoje".
   const handleCriarContasTaxaMaquininhaPorDia = (dias) => {
     const agora = Date.now();
-    const novasContas = dias.map((dia, i) => {
+    const totalDias = dias.reduce((soma, d) => soma + (Math.round(d.valor * 100) / 100), 0);
+    const novasContas = { ...contas, sicredi: contas.sicredi - Math.round(totalDias * 100) / 100 };
+    const novasMovimentacoes = dias.map((dia, i) => {
       const [ano, mes, diaNum] = dia.data.split('-');
       const dataBR = `${diaNum}/${mes}/${ano}`;
       return {
         id: agora + i,
         data: dataBR,
+        tipo: 'Débito Manual',
         descricao: 'Taxas da Maquininha',
         valor: Math.round(dia.valor * 100) / 100,
-        vencimento: dataBR,
-        status: 'Aberto',
-        conta: '',
-        categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)',
-        recorrente: false,
-        grupoRecorrente: null,
-        repeticoesRestantes: 0
+        conta: 'sicredi',
+        categoria: 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)'
       };
     });
-    const novasContasAPagar = [...contasAPagar, ...novasContas];
-    setContasAPagar(novasContasAPagar);
-    salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
+    const todasMovimentacoes = [...movimentacoes, ...novasMovimentacoes];
+    setContas(novasContas);
+    setMovimentacoes(todasMovimentacoes);
+    salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: todasMovimentacoes });
   };
 
   const handleTransferencia = () => {
