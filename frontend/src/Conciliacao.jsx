@@ -78,6 +78,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [partesDivisao, setPartesDivisao] = useState([]);
   const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
   const [casamentoManual, setCasamentoManual] = useState(null);
+  const [mostrarJaCasados, setMostrarJaCasados] = useState(false);
   const [secoesRecolhidas, setSecoesRecolhidas] = useState(new Set());
 
   const alternarSecao = (chave) => {
@@ -462,13 +463,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // comandas pagas com uma transferência só".
   const iniciarCasamentoDeComanda = (comandaId) => {
     setCasamentoManual((c) => (c?.lado === 'comanda' && c.id === comandaId ? null : { lado: 'comanda', id: comandaId, selecionados: new Set() }));
+    setMostrarJaCasados(false);
   };
 
   const iniciarCasamentoDeExtrato = (extratoId) => {
     setCasamentoManual((c) => (c?.lado === 'extrato' && c.id === extratoId ? null : { lado: 'extrato', id: extratoId, selecionados: new Set() }));
+    setMostrarJaCasados(false);
   };
 
-  const cancelarCasamentoManual = () => setCasamentoManual(null);
+  const cancelarCasamentoManual = () => { setCasamentoManual(null); setMostrarJaCasados(false); };
 
   const toggleCasamentoManual = (id) => {
     setCasamentoManual((c) => {
@@ -525,7 +528,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setCasamentoManual(null);
   };
 
-  const renderPainelCasamentoManual = (valorAlvo, descricaoAlvo, candidatos) => {
+  const renderPainelCasamentoManual = (valorAlvo, descricaoAlvo, candidatos, ocultos = 0) => {
     const selecionados = candidatos.filter((c) => casamentoManual.selecionados.has(c.id));
     const soma = Math.round(selecionados.reduce((s, c) => s + (c.valorBruto ?? c.valor), 0) * 100) / 100;
     const bate = Math.abs(soma - valorAlvo) < 0.01;
@@ -534,6 +537,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         <p className="nota-formato">
           Selecione o(s) lançamento(s) que juntos formam "{descricaoAlvo}" ({formatarMoeda(valorAlvo)}).
         </p>
+        {ocultos > 0 && (
+          <p className="nota-formato">
+            {ocultos} lançamento(s) que já casaram automaticamente com outra comanda não aparecem aqui.{' '}
+            <button onClick={() => setMostrarJaCasados(true)} className="btn-editar" style={{ padding: '2px 8px' }}>
+              Mostrar mesmo assim (caso algum esteja casado com a comanda errada)
+            </button>
+          </p>
+        )}
         {candidatos.length === 0 ? (
           <p className="nota-formato">Não sobrou nenhum lançamento sem correspondência pra escolher.</p>
         ) : (
@@ -915,12 +926,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
-              renderPainelCasamentoManual(l.valorBruto, l.descricao, (() => {
+              (() => {
                 const paresPix = resultado.paresPixExtratoSistema || [];
-                return (fontes.extrato.linhas || [])
+                const todos = (fontes.extrato.linhas || [])
                   .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
                   .map((e) => ({ ...e, usadoPorSistemaId: paresPix.find((p) => p.extratoId === e.id)?.sistemaId || null }));
-              })())}
+                const visiveis = mostrarJaCasados ? todos : todos.filter((e) => !e.usadoPorSistemaId);
+                const ocultos = todos.length - visiveis.length;
+                return renderPainelCasamentoManual(l.valorBruto, l.descricao, visiveis, ocultos);
+              })()}
           </div>
         ))}
         </>
@@ -1088,21 +1102,21 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <>
                 <p className="nota-formato">
                   A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
-                  Pra bater com o saldo do banco <strong>dia a dia</strong>, lance uma Conta a Pagar por dia, com vencimento no próprio dia em que a taxa foi descontada — em vez de um valor único.
+                  Como a maquininha já desconta a taxa antes de depositar (o que cai na Conta Corrente já é o valor líquido), isso não é uma conta em aberto — lance direto como um débito na Conta Corrente, um por dia, na data real em que a taxa foi descontada, pra bater com o saldo do banco dia a dia.
                 </p>
                 <div className="acoes" style={{ marginBottom: 10 }}>
                   <button onClick={criarTodasContasTaxaDiarias} className="btn-transferir">
-                    Criar Contas a Pagar Diárias de Todas as Taxas
+                    Lançar Todas as Taxas Diárias na Conta Corrente
                   </button>
                 </div>
                 {resultado.taxaMaquininhaPorDia.map((dia) => (
                   <div key={dia.data} className="item-conta">
                     <span>{formatarDataBR(dia.data)} — {formatarMoeda(dia.valor)}</span>
                     {diasTaxaLancados.has(dia.data) ? (
-                      <span className="nota-formato">✓ Criada</span>
+                      <span className="nota-formato">✓ Lançada</span>
                     ) : (
                       <button onClick={() => criarContaTaxaDiaria(dia)} className="btn-transferir">
-                        Criar Conta a Pagar
+                        Lançar na Conta Corrente
                       </button>
                     )}
                   </div>
@@ -1112,10 +1126,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 <>
                 <p className="nota-formato">
                   A diferença entre o valor bruto das vendas e o que efetivamente caiu no banco foi de <strong>{formatarMoeda(resultado.taxaMaquininha)}</strong> nesse período.
-                  Pra bater com o saldo do banco, lance esse valor como uma despesa em <strong>Contas a Pagar</strong>, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
+                  Como a maquininha já desconta a taxa antes de depositar (o que cai na Conta Corrente já é o valor líquido), lance esse valor direto como um débito na Conta Corrente, na classificação <strong>"Taxas de Cartão/Maquininha"</strong> — assim o faturamento fica pelo valor bruto (o que o cliente pagou) e a taxa vira despesa separada, não um desconto escondido na receita.
                 </p>
                 {taxaJaLancada ? (
-                  <p className="nota-formato">✓ Conta a pagar criada — vai aparecer em "Contas em Aberto", pronta pra você pagar de qualquer conta.</p>
+                  <p className="nota-formato">✓ Lançado como débito na Conta Corrente.</p>
                 ) : (
                   <button
                     onClick={() => {
@@ -1124,7 +1138,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                     }}
                     className="btn-transferir"
                   >
-                    Criar Conta a Pagar com esse valor
+                    Lançar na Conta Corrente
                   </button>
                 )}
                 </>
