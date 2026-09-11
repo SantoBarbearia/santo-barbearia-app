@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS contas_pagar (
   recorrente BOOLEAN DEFAULT FALSE,
   "grupoRecorrente" BIGINT,
   "repeticoesRestantes" INTEGER DEFAULT 0,
+  "dataPagamento" DATE,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );

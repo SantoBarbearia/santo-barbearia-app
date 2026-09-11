@@ -189,7 +189,11 @@ export default function App() {
 
         verificar(await supabase.from('contas_pagar').delete().neq('id', -1), 'contas a pagar');
         if (dados.contasAPagar.length > 0) {
-          verificar(await supabase.from('contas_pagar').insert(dados.contasAPagar), 'contas a pagar');
+          // dataPagamentoSelecionada é só um rascunho local (a data escolhida antes de
+          // clicar em "Pagar") — nunca deve ir pro banco. Uma coluna que não existe na
+          // tabela derruba o INSERT inteiro (e o DELETE acima já rodou, apagando tudo).
+          const contasParaSalvar = dados.contasAPagar.map(({ dataPagamentoSelecionada, ...resto }) => resto);
+          verificar(await supabase.from('contas_pagar').insert(contasParaSalvar), 'contas a pagar');
         }
 
         verificar(await supabase.from('comissoes').upsert([{ id: 1, ...achatarComissoes(dados.comissoes) }]), 'comissões');
