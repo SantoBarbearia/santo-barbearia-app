@@ -1356,6 +1356,11 @@ export default function App() {
                             </td>
                             <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td>
+                              {mov.tipo === 'Despesa Paga' && mov.contaPagarId && (
+                                <div className="acoes">
+                                  <button onClick={() => handleDesfazerPagamento(mov.contaPagarId)} className="btn-excluir">Desfazer Pagamento</button>
+                                </div>
+                              )}
                               {editavel && (
                                 <div className="acoes">
                                   <button onClick={() => handleIniciarEdicaoMovimentacao(mov)} className="btn-editar">Editar</button>
