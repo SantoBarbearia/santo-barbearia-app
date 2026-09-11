@@ -240,8 +240,6 @@ export default function App() {
     }
   };
 
-  const totalSaldo = Object.values(contas).reduce((a, b) => a + b, 0);
-
   const nomesContas = {
     caixa: 'Caixa',
     cofre: 'Cofre',
@@ -344,6 +342,26 @@ export default function App() {
     const saldoAnterior = saldoAnteriorConta(chave);
     return { chave, nome: nomesContas[chave], saldoAnterior, entradas, saidas, saldo: entradas - saidas, saldoFinal: saldoAnterior + (entradas - saidas) };
   });
+
+  // Saldo de uma conta ao FINAL do período filtrado na Visão Geral (ou o saldo
+  // atual de verdade, se nenhum período estiver filtrado) — independente do
+  // filtro de "Tipo de Conta", pra poder mostrar as 4 contas nos cartões do
+  // topo mesmo quando só uma delas está selecionada no filtro.
+  const saldoNoFimDoPeriodo = (chave) => {
+    if (!vgPeriodoInicio && !vgPeriodoFim) return contas[chave] ?? 0;
+    let entradas = 0;
+    let saidas = 0;
+    movimentacoesVG.forEach(m => {
+      if (m.tipo === 'Transferência') {
+        if (m.de === chave) saidas += m.valor;
+        if (m.para === chave) entradas += m.valor;
+      } else if (m.conta === chave) {
+        if (m.tipo === 'Despesa Paga' || m.tipo === 'Débito Manual') saidas += m.valor;
+        else entradas += m.valor;
+      }
+    });
+    return saldoAnteriorConta(chave) + (entradas - saidas);
+  };
 
   // Classifica uma movimentação como entrada/saída/transferência pra exibição
   const tipoVisualMovimentacao = (mov) => {
@@ -1067,15 +1085,18 @@ export default function App() {
         </header>
 
         <div className="cards-saldos">
-          {Object.entries(contas).map(([chave, valor]) => (
+          {Object.keys(contas).map((chave) => (
             <div key={chave} className="card-saldo">
               <p className="label">{nomesContas[chave]}</p>
-              <p className="valor">R$ {valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="valor">R$ {saldoNoFimDoPeriodo(chave).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
           ))}
           <div className="card-saldo total">
-            <p className="label">TOTAL GERAL</p>
-            <p className="valor">R$ {totalSaldo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="label">TOTAL GERAL{(vgPeriodoInicio || vgPeriodoFim) ? ` (até ${vgPeriodoFim ? isoParaBR(vgPeriodoFim) : 'hoje'})` : ''}</p>
+            <p className="valor">
+              R$ {Object.keys(contas).reduce((soma, chave) => soma + saldoNoFimDoPeriodo(chave), 0)
+                .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
           </div>
         </div>
 
@@ -1255,13 +1276,13 @@ export default function App() {
               </div>
 
               <div className="card">
-                <h3>Movimentações Recentes {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''}</h3>
+                <h3>Movimentações {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''} ({movimentacoesVGporConta.length})</h3>
                 {movimentacoesVGporConta.length === 0 ? (
                   <p>Nenhuma movimentação {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
                 ) : (
                   <table className="tabela">
                     <tbody>
-                      {[...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).slice(-8).reverse().map((mov) => {
+                      {[...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).reverse().map((mov) => {
                         const tipoVisual = tipoVisualMovimentacao(mov);
                         const editavel = mov.tipo === 'Crédito Manual' || mov.tipo === 'Débito Manual';
 
