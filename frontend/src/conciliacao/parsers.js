@@ -157,6 +157,14 @@ function encontrarLinhaCabecalho(linhas, primeiraColunaEsperada) {
   return -1;
 }
 
+// Acha o índice de uma coluna pelo nome do cabeçalho (em vez de uma posição
+// fixa) — os relatórios da Sicredi mudam ligeiramente de layout entre
+// exportações, então procurar pelo nome é mais seguro que contar colunas.
+function encontrarColuna(linhaCabecalho, nomeColuna) {
+  const alvo = nomeColuna.trim().toLowerCase();
+  return (linhaCabecalho || []).findIndex((c) => String(c || '').trim().toLowerCase() === alvo);
+}
+
 // Reconhece formatos conhecidos (Sicredi maquininha, balanço do sistema) pra pular o
 // mapeamento manual de colunas e já aplicar o tratamento certo pra cada um.
 export function detectarFormatoConhecido(linhas) {
@@ -212,6 +220,60 @@ export function parseSicrediPagamentos(linhas) {
   return Object.values(grupos)
     .map((g) => ({ ...g, id: novoId('maq'), valor: Math.round(g.valor * 100) / 100 }))
     .filter((g) => g.data && g.valor > 0);
+}
+
+// Versão do Relatório de Pagamentos SEM agrupar por dia — uma linha por
+// venda/parcela, preservando o "Código de autorização" (que também aparece
+// no Relatório de Vendas com o mesmo valor) pra permitir ligar uma venda
+// específica ao(s) pagamento(s) dela, em vez de só bater a soma do dia com
+// o extrato (o que não garante que aquela comanda em particular realmente
+// foi liquidada).
+export function parseSicrediPagamentosDetalhado(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data de pagamento');
+  if (idxCabecalho === -1) return [];
+  const colCodigo = encontrarColuna(linhas[idxCabecalho], 'Código de autorização');
+  const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
+
+  return dados
+    .map((r) => ({
+      id: novoId('pagdet'),
+      data: paraDataISO(r[0]),
+      codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
+      bandeira: r[15],
+      valorBruto: parseValorBR(r[18]) || 0,
+      valorLiquido: parseValorBR(r[22]) || 0
+    }))
+    .filter((r) => r.data && r.codigoAutorizacao);
+}
+
+// Liga cada Venda ao(s) Pagamento(s) correspondente(s) pelo "Código de
+// autorização" — uma chave exata (não por valor+data, que pode confundir
+// vendas de mesmo valor no mesmo dia). Uma venda parcelada pode ter várias
+// linhas no relatório de Pagamentos (uma por parcela, cada uma liquidada
+// num dia diferente) — soma todas as que tiverem o mesmo código.
+export function ligarVendasComPagamentos(vendas, pagamentosDetalhado) {
+  const porCodigo = {};
+  (pagamentosDetalhado || []).forEach((p) => {
+    if (!p.codigoAutorizacao) return;
+    if (!porCodigo[p.codigoAutorizacao]) porCodigo[p.codigoAutorizacao] = [];
+    porCodigo[p.codigoAutorizacao].push(p);
+  });
+
+  return vendas.map((v) => {
+    const pagamentos = (v.codigoAutorizacao && porCodigo[v.codigoAutorizacao]) || [];
+    if (pagamentos.length === 0) {
+      return { ...v, encontradoEmPagamentos: false, valorBrutoPago: null, valorLiquidoReal: null, taxaReal: null };
+    }
+    const valorBrutoPago = Math.round(pagamentos.reduce((s, p) => s + p.valorBruto, 0) * 100) / 100;
+    const valorLiquidoReal = Math.round(pagamentos.reduce((s, p) => s + p.valorLiquido, 0) * 100) / 100;
+    return {
+      ...v,
+      encontradoEmPagamentos: true,
+      valorBrutoPago,
+      valorLiquidoReal,
+      taxaReal: Math.round((valorBrutoPago - valorLiquidoReal) * 100) / 100
+    };
+  });
 }
 
 // Exportação do sistema (balanço): mistura recebimentos, pagamentos e linhas de
@@ -291,6 +353,7 @@ export function parseBalancoSistema(linhas) {
 export function parseSicrediVendas(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data da venda');
   if (idxCabecalho === -1) return [];
+  const colCodigo = encontrarColuna(linhas[idxCabecalho], 'Código de autorização');
   const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
 
   const vistos = new Map();
@@ -308,6 +371,7 @@ export function parseSicrediVendas(linhas) {
       data,
       descricao: `Venda no cartão - ${bandeira}`,
       valor: Math.round(valorBruto * 100) / 100,
+      codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
       tipo: 'entrada'
     });
   });
