@@ -337,9 +337,17 @@ export function parseBalancoSistema(linhas) {
     const idComanda = (descricao.match(/^Comanda\s+(.+)$/i) || [])[1];
     const taxa = (idComanda && taxaPorComanda[idComanda.trim()]) || 0;
 
+    // A descrição traz "Comanda Fulano - dd/mm/aaaa HH:MM" — o horário de
+    // fechamento da comanda ajuda a desempatar quando duas comandas de
+    // cartão têm o mesmo valor no mesmo dia (o casamento com o Relatório de
+    // Vendas passa a preferir o horário mais próximo, não só o mesmo dia).
+    const horaMatch = descricao.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+    const dataHora = horaMatch ? `${paraDataISO(horaMatch[1])}T${horaMatch[2]}:00` : null;
+
     registros.push({
       id: novoId('sis'),
       data,
+      dataHora,
       descricao,
       valor,
       valorBruto: valor,
@@ -375,9 +383,16 @@ export function parseSicrediVendas(linhas) {
     const bandeira = r[12];
     if (!data || !(valorBruto > 0)) return;
 
+    // "Hora da venda" (r[1]) permite comparar o horário da venda com o
+    // horário de fechamento da comanda — útil quando duas comandas do mesmo
+    // valor caem no mesmo dia e só o horário desempata qual é qual.
+    const horaMatch = String(r[1] || '').match(/^(\d{2}:\d{2})/);
+    const dataHora = horaMatch ? `${data}T${horaMatch[1]}:00` : null;
+
     vistos.set(comprovante, {
       id: novoId('venda'),
       data,
+      dataHora,
       descricao: `Venda no cartão - ${bandeira}`,
       valor: Math.round(valorBruto * 100) / 100,
       codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,

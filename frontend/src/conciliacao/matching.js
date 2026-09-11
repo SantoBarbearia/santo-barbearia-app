@@ -2,6 +2,17 @@ function diasEntre(dataIsoA, dataIsoB) {
   return Math.abs((new Date(dataIsoA) - new Date(dataIsoB)) / 86400000);
 }
 
+// Quando os dois lados trazem horário (ex: comanda fechada às 14:30 x venda
+// registrada às 14:32 na maquininha), compara minuto a minuto em vez de só o
+// dia — mais preciso pra desempatar comandas de mesmo valor no mesmo dia.
+// Sem dataHora de um dos lados, cai pra meia-noite (equivalente a comparar só
+// a data, igual ao comportamento anterior).
+function minutosEntre(a, b) {
+  const tempoA = new Date(a.dataHora || a.data).getTime();
+  const tempoB = new Date(b.dataHora || b.data).getTime();
+  return Math.abs(tempoA - tempoB) / 60000;
+}
+
 function normalizarNomeParaComparacao(texto) {
   return String(texto || '')
     .toUpperCase()
@@ -41,14 +52,25 @@ function similaridadeNomes(nomeA, nomeB) {
 }
 
 // Casa cada item de listaA com o melhor candidato em listaB: mesmo valor,
-// dentro da tolerância de dias, priorizando quem tem o nome mais parecido
-// (útil em Pix, onde o extrato e a comanda costumam trazer o nome de quem
-// pagou) — sem isso, duas comandas de mesmo valor no mesmo dia podiam ser
-// trocadas entre si só por causa da data. Quando nenhum dos dois lados tem
-// nome reconhecível (ex: taxas de maquininha, contas a pagar), o
-// desempate cai de volta pra data mais próxima, exatamente como antes.
+// dentro da tolerância de dias, priorizando primeiro quem tem o nome mais
+// parecido (útil em Pix, onde o extrato e a comanda costumam trazer o nome
+// de quem pagou) e depois quem tem o horário mais próximo (útil em cartão,
+// onde a comanda fechada e a venda na maquininha costumam ter o horário bem
+// parecido) — sem isso, duas comandas/vendas de mesmo valor no mesmo dia
+// podiam ser trocadas entre si só por sorte de ordenação. Quando nenhum dos
+// dois lados tem nome ou horário reconhecível, o desempate cai de volta pra
+// data mais próxima, exatamente como antes.
+//
+// Com opcoes.exigirNome, um casamento só é confirmado automaticamente se
+// tiver algum sinal de nome batendo (similaridade > 0) — sem isso, cai pra
+// "sem correspondência" dos dois lados, esperando confirmação manual. Existe
+// porque, sem esse sinal, o valor+data sozinho pode casar a pessoa errada:
+// alguém pagou mas não foi lançado no sistema, outra pessoa foi lançada mas
+// não pagou — e um casamento automático "às cegas" deixaria a pessoa errada
+// parecendo inadimplente (ou parecendo paga sem ter pago).
 // Retorna os pares batidos e o que sobrou sem correspondência de cada lado.
-export function conciliar(listaA, listaB, toleranciaDias = 3) {
+export function conciliar(listaA, listaB, toleranciaDias = 3, opcoes = {}) {
+  const { exigirNome = false } = opcoes;
   const usadosB = new Set();
   const pares = [];
   const semParA = [];
@@ -62,11 +84,14 @@ export function conciliar(listaA, listaB, toleranciaDias = 3) {
       const dias = diasEntre(a.data, b.data);
       if (dias > toleranciaDias) return;
       const similaridade = similaridadeNomes(nomeA, extrairNomeDaDescricao(b.descricao));
-      if (!melhor || similaridade > melhor.similaridade || (similaridade === melhor.similaridade && dias < melhor.dias)) {
-        melhor = { b, dias, similaridade };
+      const minutos = minutosEntre(a, b);
+      if (!melhor ||
+          similaridade > melhor.similaridade ||
+          (similaridade === melhor.similaridade && minutos < melhor.minutos)) {
+        melhor = { b, dias, similaridade, minutos };
       }
     });
-    if (melhor) {
+    if (melhor && (!exigirNome || melhor.similaridade > 0)) {
       pares.push({ a, b: melhor.b });
       usadosB.add(melhor.b.id);
     } else {
