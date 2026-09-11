@@ -294,7 +294,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       .filter((l) => !l.viaDinheiro)
       .filter((l) => dentroDoPeriodoDoExtrato(l.data));
 
-    const passo1 = conciliar(entradasExtrato, sistemaPix);
+    // Exige que o nome do extrato e o da comanda tenham alguma semelhança pra
+    // confirmar um Pix automaticamente — sem esse sinal, fica pendente pra
+    // confirmação manual (evita casar a pessoa errada só por valor+data).
+    const passo1 = conciliar(entradasExtrato, sistemaPix, 3, { exigirNome: true });
     const passo2 = conciliar(passo1.semParA, maquininha);
     const passo2b = conciliar(passo2.semParA, lancamentosManuaisEntrada);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
