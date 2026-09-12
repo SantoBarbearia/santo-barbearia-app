@@ -378,8 +378,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // confirmar um Pix automaticamente — sem esse sinal, fica pendente pra
     // confirmação manual (evita casar a pessoa errada só por valor+data).
     const passo1 = conciliar(entradasExtrato, sistemaPix, 3, { exigirNome: true });
-    const passo2 = conciliar(passo1.semParA, maquininha);
-    const passo2b = conciliar(passo2.semParA, lancamentosManuaisEntrada);
+    // Uma entrada do extrato que já é claramente um Pix (a Sicredi sempre
+    // escreve "PIX" na descrição) nunca deve tentar casar com a maquininha —
+    // sem essa separação, um Pix sem comanda no Sistema podia coincidir em
+    // valor+data com um depósito de cartão e "sumir" (contado como já
+    // conciliado com a maquininha) sem nunca ter sido lançado de verdade.
+    const semParAPix = passo1.semParA.filter((l) => /pix/i.test(l.descricao));
+    const semParANaoPix = passo1.semParA.filter((l) => !/pix/i.test(l.descricao));
+    const passo2 = conciliar(semParANaoPix, maquininha);
+    const passo2b = conciliar([...passo2.semParA, ...semParAPix], lancamentosManuaisEntrada);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
     const passo3b = conciliar(passo3.semParA, lancamentosManuaisSaida);
     const passo4 = conciliar(vendas, sistemaCartao);
