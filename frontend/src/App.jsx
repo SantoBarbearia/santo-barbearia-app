@@ -891,6 +891,37 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
+  // Igual ao handleLancarDoExtrato, mas pra lançar VÁRIAS linhas de uma vez só
+  // (ex: várias vendas sem comanda de um mesmo depósito da maquininha) num só
+  // round-trip ao banco. Chamar handleLancarDoExtrato repetidas vezes no mesmo
+  // clique não funcionaria: cada chamada leria "movimentacoes"/"contas" do
+  // mesmo estado (ainda não atualizado pela chamada anterior) e cada uma
+  // sobrescreveria o resultado da anterior em vez de somar — só a última
+  // linha do lote acabaria sendo salva de verdade.
+  const handleLancarVariasNaContaCorrente = (linhas) => {
+    const baseId = Date.now();
+    let delta = 0;
+    const novasMovs = linhas.map((linha, i) => {
+      const [ano, mes, dia] = linha.data.split('-');
+      delta += linha.tipo === 'entrada' ? linha.valor : -linha.valor;
+      return {
+        id: baseId + i,
+        data: `${dia}/${mes}/${ano}`,
+        tipo: linha.tipo === 'entrada' ? 'Crédito Manual' : 'Débito Manual',
+        descricao: `${capitalizarTexto(linha.descricao)} (lançado da Conciliação)`,
+        valor: linha.valor,
+        conta: 'sicredi',
+        categoria: linha.categoria || ''
+      };
+    });
+    const novasContas = { ...contas, sicredi: contas.sicredi + delta };
+    const novasMovimentacoes = [...movimentacoes, ...novasMovs];
+
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+  };
+
   // Divide uma linha do extrato (ex: uma compra no mercado que mistura
   // material de limpeza, bebidas e insumos de lanche no mesmo débito) em
   // várias movimentações — o valor total lançado na Conta Corrente continua
@@ -1803,6 +1834,7 @@ export default function App() {
               movimentacoes={movimentacoes}
               categorias={categorias}
               onLancarMovimentacao={handleLancarDoExtrato}
+              onLancarVariasNaContaCorrente={handleLancarVariasNaContaCorrente}
               onDividirLancamento={handleDividirLancamento}
               onLancarFaturamentoBruto={handleLancarFaturamentoBruto}
               onLancarCaixa={handleLancarCaixa}

@@ -99,7 +99,7 @@ function foiLancadoAntes(candidatos, descricaoOriginal, valor) {
   return candidatos.some((c) => Math.abs(c.valor - valor) < 0.01 && c.normalizado.startsWith(alvo));
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto }) {
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -582,11 +582,18 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       if (duplicatas.length > 0) alert('Todas as vendas sem comanda desse depósito parecem já ter sido lançadas antes — nada foi lançado de novo.');
       return;
     }
-    pendentes.forEach((item) => {
+    // Lança tudo numa chamada só (onLancarVariasNaContaCorrente) em vez de
+    // chamar onLancarMovimentacao uma vez por item: chamar a versão de item
+    // único várias vezes seguidas no mesmo clique perderia lançamentos — cada
+    // chamada leria o saldo/lista de movimentações ainda desatualizados (de
+    // antes da chamada anterior) e cada uma sobrescreveria o resultado da
+    // outra, sobrando só a última linha do lote.
+    const linhas = pendentes.map((item) => {
       const descricao = descricaoVendaSemComanda(item);
       const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
-      onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorBruto, categoria });
+      return { data: deposito.data, tipo: 'entrada', descricao, valor: item.valorBruto, categoria };
     });
+    onLancarVariasNaContaCorrente(linhas);
     setIgnorados((s) => {
       const novo = new Set(s);
       pendentes.forEach((item) => novo.add(item.id));
