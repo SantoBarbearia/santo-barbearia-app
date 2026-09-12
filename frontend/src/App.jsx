@@ -291,10 +291,19 @@ export default function App() {
     return `${dia}/${mes}/${ano}`;
   };
 
+  // Um clique errado no seletor nativo de data (ou o navegador confirmando o
+  // campo antes da pessoa terminar de digitar o ano) pode deixar o filtro com
+  // uma data tipo "0001-01-01" — sem essa proteção, isso vira um período que
+  // literalmente começa "desde o início dos tempos", incluindo qualquer
+  // resíduo antigo do saldo da conta que não devia aparecer em lugar nenhum.
+  const anoValido = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso || '') && parseInt(iso.slice(0, 4), 10) >= 2000;
+  const vgInicio = anoValido(vgPeriodoInicio) ? vgPeriodoInicio : '';
+  const vgFim = anoValido(vgPeriodoFim) ? vgPeriodoFim : '';
+
   const dentroDoPeriodoVG = (dataISO) => {
-    if (!vgPeriodoInicio && !vgPeriodoFim) return true;
-    if (vgPeriodoInicio && dataISO < vgPeriodoInicio) return false;
-    if (vgPeriodoFim && dataISO > vgPeriodoFim) return false;
+    if (!vgInicio && !vgFim) return true;
+    if (vgInicio && dataISO < vgInicio) return false;
+    if (vgFim && dataISO > vgFim) return false;
     return true;
   };
 
@@ -318,7 +327,7 @@ export default function App() {
     let saldo = contas[chave] ?? 0;
     movimentacoes.forEach(m => {
       const dataISO = dataMovParaISO(m.data);
-      if (!dataISO || dataISO < vgPeriodoInicio) return;
+      if (!dataISO || dataISO < vgInicio) return;
       if (m.tipo === 'Transferência') {
         if (m.de === chave) saldo += m.valor;
         if (m.para === chave) saldo -= m.valor;
@@ -356,7 +365,7 @@ export default function App() {
   // filtro de "Tipo de Conta", pra poder mostrar as 4 contas nos cartões do
   // topo mesmo quando só uma delas está selecionada no filtro.
   const saldoNoFimDoPeriodo = (chave) => {
-    if (!vgPeriodoInicio && !vgPeriodoFim) return contas[chave] ?? 0;
+    if (!vgInicio && !vgFim) return contas[chave] ?? 0;
     let entradas = 0;
     let saidas = 0;
     movimentacoesVG.forEach(m => {
@@ -399,8 +408,8 @@ export default function App() {
       }
     };
 
-    const periodoLabel = (vgPeriodoInicio || vgPeriodoFim)
-      ? `${vgPeriodoInicio ? isoParaBR(vgPeriodoInicio) : 'início'} até ${vgPeriodoFim ? isoParaBR(vgPeriodoFim) : 'hoje'}`
+    const periodoLabel = (vgInicio || vgFim)
+      ? `${vgInicio ? isoParaBR(vgInicio) : 'início'} até ${vgFim ? isoParaBR(vgFim) : 'hoje'}`
       : 'Todo o período';
 
     const linhasResumo = [
@@ -1103,7 +1112,7 @@ export default function App() {
             </div>
           ))}
           <div className="card-saldo total">
-            <p className="label">TOTAL GERAL{(vgPeriodoInicio || vgPeriodoFim) ? ` (até ${vgPeriodoFim ? isoParaBR(vgPeriodoFim) : 'hoje'})` : ''}</p>
+            <p className="label">TOTAL GERAL{(vgInicio || vgFim) ? ` (até ${vgFim ? isoParaBR(vgFim) : 'hoje'})` : ''}</p>
             <p className="valor">
               R$ {Object.keys(contas).reduce((soma, chave) => soma + saldoNoFimDoPeriodo(chave), 0)
                 .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1192,11 +1201,27 @@ export default function App() {
                 <div className="form-transferencia">
                   <div className="input-group">
                     <label>De</label>
-                    <input type="date" value={vgPeriodoInicio} onChange={(e) => setVgPeriodoInicio(e.target.value)} />
+                    <input
+                      type="date"
+                      value={vgPeriodoInicio}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v && !anoValido(v)) return;
+                        setVgPeriodoInicio(v);
+                      }}
+                    />
                   </div>
                   <div className="input-group">
                     <label>Até</label>
-                    <input type="date" value={vgPeriodoFim} onChange={(e) => setVgPeriodoFim(e.target.value)} />
+                    <input
+                      type="date"
+                      value={vgPeriodoFim}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v && !anoValido(v)) return;
+                        setVgPeriodoFim(v);
+                      }}
+                    />
                   </div>
                   <div className="input-group">
                     <label>Tipo de Conta</label>
@@ -1221,7 +1246,7 @@ export default function App() {
               </div>
 
               <div className="card">
-                <h3>Resumo Financeiro {(vgPeriodoInicio || vgPeriodoFim) ? 'do Período' : ''}</h3>
+                <h3>Resumo Financeiro {(vgInicio || vgFim) ? 'do Período' : ''}</h3>
                 <div className="resumo-grid">
                   <div
                     className="resumo-item clicavel"
@@ -1244,7 +1269,7 @@ export default function App() {
                 {mostrarDetalheAbertas && (
                   <div className="detalhe-lista">
                     {abertasVG.length === 0 ? (
-                      <p>Nenhuma conta em aberto {(vgPeriodoInicio || vgPeriodoFim) ? 'nesse período' : ''}.</p>
+                      <p>Nenhuma conta em aberto {(vgInicio || vgFim) ? 'nesse período' : ''}.</p>
                     ) : (
                       <table className="tabela">
                         <tbody>
@@ -1291,9 +1316,9 @@ export default function App() {
               </div>
 
               <div className="card">
-                <h3>Movimentações {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''} ({movimentacoesVGporConta.length})</h3>
+                <h3>Movimentações {(vgInicio || vgFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''} ({movimentacoesVGporConta.length})</h3>
                 {movimentacoesVGporConta.length === 0 ? (
-                  <p>Nenhuma movimentação {(vgPeriodoInicio || vgPeriodoFim || vgTipoConta !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
+                  <p>Nenhuma movimentação {(vgInicio || vgFim || vgTipoConta !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
                 ) : (
                   <table className="tabela">
                     <tbody>
