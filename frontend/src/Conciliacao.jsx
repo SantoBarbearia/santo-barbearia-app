@@ -10,6 +10,7 @@ import {
   parseSicrediPagamentos,
   parseSicrediPagamentosDetalhado,
   parseSicrediPagamentosComoVendas,
+  agruparPagamentosPorDeposito,
   parseSicrediVendas,
   ligarVendasComPagamentos,
   parseBalancoSistema,
@@ -106,6 +107,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [casamentoManual, setCasamentoManual] = useState(null);
   const [mostrarJaCasados, setMostrarJaCasados] = useState(false);
   const [secoesRecolhidas, setSecoesRecolhidas] = useState(new Set());
+  const [depositosExpandidos, setDepositosExpandidos] = useState(new Set());
+  const alternarDeposito = (id) => {
+    setDepositosExpandidos((s) => {
+      const novo = new Set(s);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return novo;
+    });
+  };
 
   const alternarSecao = (chave) => {
     setSecoesRecolhidas((s) => {
@@ -422,6 +431,37 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // relatório de Pagamentos, então toda venda conta como confirmada.
     const vendasComPagamento = vendas;
 
+    // "Abre" cada depósito da maquininha (o mesmo valor agrupado que bate com
+    // UMA linha do extrato, tipo "SICREDI CREDITO MASTER") nas vendas/parcelas
+    // que somadas formam aquele valor — pra ela conferir bruto, taxa e líquido
+    // de cada uma, igual ela já faz manualmente comparando extrato x Pagamentos.
+    const maquininhaConfirmadoIds = new Set(passo2.pares.map((p) => p.b.id));
+    const extratoPorMaquininhaId = new Map(passo2.pares.map((p) => [p.b.id, p.a]));
+    const maquininhaPorChaveDeposito = new Map(maquininha.map((m) => [`${m.data}|${m.descricao}`, m]));
+    // Uma venda só é rastreável até uma comanda do Sistema se ela também bateu
+    // no passo4 (Vendas x Sistema, por valor+horário) E carrega Código de
+    // Autorização — sem isso não dá pra saber quem é o cliente daquela venda.
+    const comandaPorCodigoAutorizacao = new Map(
+      passo4.pares.filter((p) => p.a.codigoAutorizacao).map((p) => [p.a.codigoAutorizacao, p.b.descricao])
+    );
+    const composicaoDepositos = agruparPagamentosPorDeposito(fontes.maquininha.pagamentosDetalhado || [])
+      .map((g) => {
+        const maquininhaItem = maquininhaPorChaveDeposito.get(`${g.data}|${g.descricao}`);
+        const extratoPareado = maquininhaItem ? extratoPorMaquininhaId.get(maquininhaItem.id) : null;
+        return {
+          ...g,
+          confirmadoNoExtrato: !!maquininhaItem && maquininhaConfirmadoIds.has(maquininhaItem.id),
+          extratoDescricao: extratoPareado?.descricao ?? null,
+          taxaTotal: Math.round((g.valorBrutoTotal - g.valorLiquidoTotal) * 100) / 100,
+          itens: g.itens.map((item) => ({
+            ...item,
+            taxa: Math.round((item.valorBruto - item.valorLiquido) * 100) / 100,
+            comandaEncontrada: item.codigoAutorizacao ? (comandaPorCodigoAutorizacao.get(item.codigoAutorizacao) ?? null) : null
+          }))
+        };
+      })
+      .sort((a, b) => a.data.localeCompare(b.data));
+
     setResultado({
       recebimentos: {
         conciliadoSistema: passo1.pares.length,
@@ -450,7 +490,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
       paresPixExtratoSistema,
       vendasComPagamento,
-      vendasDeArquivoSeparado
+      vendasDeArquivoSeparado,
+      composicaoDepositos
     });
     setIgnorados(new Set());
     setTaxaJaLancada(false);
@@ -1430,6 +1471,90 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 )}
                 </>
               )}
+              </>
+              )}
+            </div>
+          )}
+
+          {resultado.composicaoDepositos && resultado.composicaoDepositos.length > 0 && (
+            <div className="card">
+              {renderTituloSecao('Composição dos Depósitos da Maquininha', 'composicaoDepositos')}
+              {!secoesRecolhidas.has('composicaoDepositos') && (
+              <>
+              <p className="upload-dica">
+                Cada linha aqui é um valor agrupado do jeito que cai no extrato (ex: "Maquininha - Crédito Mastercard", que vira "SICREDI CREDITO MASTER" no banco). Clique em "Ver composição" pra conferir quais vendas — com bruto, taxa e líquido de cada uma — somam exatamente esse depósito, e se cada uma já tem comanda no Sistema.
+              </p>
+              {resultado.composicaoDepositos.map((d) => {
+                const aberto = depositosExpandidos.has(d.id);
+                const semComanda = d.itens.filter((item) => !item.comandaEncontrada);
+                return (
+                  <div key={d.id} style={{ marginBottom: 10 }}>
+                    <div className="divergencia-item divergencia-entrada">
+                      <div className="info-conta">
+                        <p className="desc">
+                          {formatarDataBR(d.data)} — {d.descricao}{' '}
+                          {d.confirmadoNoExtrato ? (
+                            <span className="badge-categoria" style={{ color: '#27ae60' }}>
+                              ✓ bate com o extrato{d.extratoDescricao ? `: ${d.extratoDescricao}` : ''}
+                            </span>
+                          ) : (
+                            <span className="badge-categoria" style={{ color: '#c0862e' }}>⏳ ainda não achei essa linha no extrato</span>
+                          )}
+                          {semComanda.length > 0 && (
+                            <span className="badge-categoria" style={{ color: '#c0392b' }}>
+                              {' '}⚠️ {semComanda.length} venda{semComanda.length > 1 ? 's' : ''} sem comanda no Sistema
+                            </span>
+                          )}
+                        </p>
+                        <p className="venc">
+                          Bruto {formatarMoeda(d.valorBrutoTotal)} − Taxa {formatarMoeda(d.taxaTotal)} = Líquido {formatarMoeda(d.valorLiquidoTotal)}
+                        </p>
+                      </div>
+                      <p className="valor-conta">{formatarMoeda(d.valorLiquidoTotal)}</p>
+                      <div className="acoes">
+                        <button onClick={() => alternarDeposito(d.id)} className="btn-editar">
+                          {aberto ? 'Fechar composição' : `Ver composição (${d.itens.length} venda${d.itens.length > 1 ? 's' : ''})`}
+                        </button>
+                      </div>
+                    </div>
+                    {aberto && (
+                      <table className="tabela-saldo-conta" style={{ marginTop: 6 }}>
+                        <thead>
+                          <tr>
+                            <th>Data/Hora da Venda</th>
+                            <th>Bandeira</th>
+                            <th>Valor Bruto</th>
+                            <th>Taxa</th>
+                            <th>Valor Líquido</th>
+                            <th>Comanda no Sistema</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {d.itens.map((item) => (
+                            <tr key={item.id}>
+                              <td>
+                                {formatarDataBR(item.dataVenda)}
+                                {item.dataHoraVenda ? ` ${item.dataHoraVenda.slice(11, 16)}` : ''}
+                              </td>
+                              <td>{item.bandeira}</td>
+                              <td className="valor-entrada">R$ {item.valorBruto.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="valor-saida">R$ {item.taxa.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td>R$ {item.valorLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td>
+                                {item.comandaEncontrada ? (
+                                  <span style={{ color: '#27ae60' }}>✓ {item.comandaEncontrada}</span>
+                                ) : (
+                                  <span style={{ color: '#c0392b' }}>⚠️ Sem comanda correspondente</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
               </>
               )}
             </div>
