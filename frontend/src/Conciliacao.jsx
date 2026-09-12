@@ -469,7 +469,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               ...item,
               taxa: Math.round((item.valorBruto - item.valorLiquido) * 100) / 100,
               comandaEncontrada,
-              possivelDuplicata: comandaEncontrada ? false : foiLancadoAntes(creditosManuaisSicredi, descricaoVendaSemComanda(item), item.valorLiquido)
+              // Compara pelo valor BRUTO (o que de fato é lançado como Receita) —
+              // a taxa dessa venda já é descontada separadamente e uma vez só,
+              // junto com a de todas as vendas do dia, em "Taxas da Maquininha".
+              possivelDuplicata: comandaEncontrada ? false : foiLancadoAntes(creditosManuaisSicredi, descricaoVendaSemComanda(item), item.valorBruto)
             };
           })
         };
@@ -559,13 +562,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // Uma venda que passou na maquininha mas não tem comanda no Sistema nunca
   // aparece em "Faturamento Bruto do Sistema" (que só lista o que existe no
   // Sistema) — sem isso, esse dinheiro simplesmente nunca entraria na Conta
-  // Corrente do app. Lança o valor LÍQUIDO direto como Receita (não tem bruto
-  // de comanda pra separar taxa) na data em que ele realmente caiu no banco.
+  // Corrente do app. Lança o valor BRUTO como Receita — igual o Faturamento
+  // Bruto do Sistema já faz — porque a taxa dessa venda já é descontada à
+  // parte, uma vez só pro dia inteiro, em "Taxas da Maquininha"; lançar o
+  // líquido aqui descontaria a taxa de novo, embutida, duplicando o desconto.
   const lancarVendaSemComanda = (item, deposito) => {
     const descricao = descricaoVendaSemComanda(item);
     if (item.possivelDuplicata && !window.confirm('Já existe uma Receita muito parecida com essa venda (mesmo valor e descrição) na Conta Corrente — pode já ter sido lançada numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
-    onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorLiquido, categoria });
+    onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorBruto, categoria });
     marcarIgnorado(item.id);
   };
 
@@ -580,7 +585,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     pendentes.forEach((item) => {
       const descricao = descricaoVendaSemComanda(item);
       const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
-      onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorLiquido, categoria });
+      onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorBruto, categoria });
     });
     setIgnorados((s) => {
       const novo = new Set(s);
