@@ -55,6 +55,16 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
+// Descrição de uma venda da maquininha que não tem comanda no Sistema — usada
+// tanto pra lançar (Composição dos Depósitos) quanto pra reconhecer, numa
+// conciliação futura, que aquela venda específica já foi lançada antes (pelo
+// Código de Autorização, que não se repete).
+function descricaoVendaSemComanda(item) {
+  const hora = item.dataHoraVenda ? ` ${item.dataHoraVenda.slice(11, 16)}` : '';
+  const codigo = item.codigoAutorizacao ? ` (Cód. ${item.codigoAutorizacao})` : '';
+  return `Venda sem comanda no Sistema - ${item.bandeira} - ${formatarDataBR(item.dataVenda)}${hora}${codigo}`;
+}
+
 // Reduz uma descrição do extrato ao "miolo" dela (sem número de referência,
 // data ou pontuação), pra comparar "SICREDI DEBITO ELO-862207549 |0001-59"
 // desse mês com "SICREDI DEBITO ELO-839911204 |0001-59" de um mês anterior
@@ -453,11 +463,15 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           confirmadoNoExtrato: !!maquininhaItem && maquininhaConfirmadoIds.has(maquininhaItem.id),
           extratoDescricao: extratoPareado?.descricao ?? null,
           taxaTotal: Math.round((g.valorBrutoTotal - g.valorLiquidoTotal) * 100) / 100,
-          itens: g.itens.map((item) => ({
-            ...item,
-            taxa: Math.round((item.valorBruto - item.valorLiquido) * 100) / 100,
-            comandaEncontrada: item.codigoAutorizacao ? (comandaPorCodigoAutorizacao.get(item.codigoAutorizacao) ?? null) : null
-          }))
+          itens: g.itens.map((item) => {
+            const comandaEncontrada = item.codigoAutorizacao ? (comandaPorCodigoAutorizacao.get(item.codigoAutorizacao) ?? null) : null;
+            return {
+              ...item,
+              taxa: Math.round((item.valorBruto - item.valorLiquido) * 100) / 100,
+              comandaEncontrada,
+              possivelDuplicata: comandaEncontrada ? false : foiLancadoAntes(creditosManuaisSicredi, descricaoVendaSemComanda(item), item.valorLiquido)
+            };
+          })
         };
       })
       .sort((a, b) => a.data.localeCompare(b.data));
@@ -540,6 +554,42 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const categoria = categoriaPorLinha[linha.id] ?? sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarFaturamentoBruto([{ ...linha, categoria }]);
     marcarIgnorado(linha.id);
+  };
+
+  // Uma venda que passou na maquininha mas não tem comanda no Sistema nunca
+  // aparece em "Faturamento Bruto do Sistema" (que só lista o que existe no
+  // Sistema) — sem isso, esse dinheiro simplesmente nunca entraria na Conta
+  // Corrente do app. Lança o valor LÍQUIDO direto como Receita (não tem bruto
+  // de comanda pra separar taxa) na data em que ele realmente caiu no banco.
+  const lancarVendaSemComanda = (item, deposito) => {
+    const descricao = descricaoVendaSemComanda(item);
+    if (item.possivelDuplicata && !window.confirm('Já existe uma Receita muito parecida com essa venda (mesmo valor e descrição) na Conta Corrente — pode já ter sido lançada numa conciliação anterior. Lançar mesmo assim?')) return;
+    const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
+    onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorLiquido, categoria });
+    marcarIgnorado(item.id);
+  };
+
+  const lancarTodasVendasSemComandaDoDeposito = (deposito) => {
+    const semComanda = deposito.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(item.id));
+    const pendentes = semComanda.filter((item) => !item.possivelDuplicata);
+    const duplicatas = semComanda.filter((item) => item.possivelDuplicata);
+    if (pendentes.length === 0) {
+      if (duplicatas.length > 0) alert('Todas as vendas sem comanda desse depósito parecem já ter sido lançadas antes — nada foi lançado de novo.');
+      return;
+    }
+    pendentes.forEach((item) => {
+      const descricao = descricaoVendaSemComanda(item);
+      const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
+      onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorLiquido, categoria });
+    });
+    setIgnorados((s) => {
+      const novo = new Set(s);
+      pendentes.forEach((item) => novo.add(item.id));
+      return novo;
+    });
+    if (duplicatas.length > 0) {
+      alert(`${duplicatas.length} venda(s) ficaram de fora por já parecerem lançadas antes — confira e lance individualmente se precisar mesmo assim.`);
+    }
   };
 
   // Lançar todas de uma vez cria os IDs em sequência (ver handleLancarFaturamentoBruto
@@ -1486,7 +1536,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               </p>
               {resultado.composicaoDepositos.map((d) => {
                 const aberto = depositosExpandidos.has(d.id);
-                const semComanda = d.itens.filter((item) => !item.comandaEncontrada);
+                const semComanda = d.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(item.id));
                 return (
                   <div key={d.id} style={{ marginBottom: 10 }}>
                     <div className="divergencia-item divergencia-entrada">
@@ -1512,6 +1562,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                       </div>
                       <p className="valor-conta">{formatarMoeda(d.valorLiquidoTotal)}</p>
                       <div className="acoes">
+                        {semComanda.length > 1 && (
+                          <button onClick={() => lancarTodasVendasSemComandaDoDeposito(d)} className="btn-transferir">
+                            Lançar {semComanda.length} Sem Comanda na Conta Corrente
+                          </button>
+                        )}
                         <button onClick={() => alternarDeposito(d.id)} className="btn-editar">
                           {aberto ? 'Fechar composição' : `Ver composição (${d.itens.length} venda${d.itens.length > 1 ? 's' : ''})`}
                         </button>
@@ -1543,8 +1598,19 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                               <td>
                                 {item.comandaEncontrada ? (
                                   <span style={{ color: '#27ae60' }}>✓ {item.comandaEncontrada}</span>
+                                ) : ignorados.has(item.id) ? (
+                                  <span style={{ color: '#27ae60' }}>✓ Lançada como Receita</span>
                                 ) : (
-                                  <span style={{ color: '#c0392b' }}>⚠️ Sem comanda correspondente</span>
+                                  <>
+                                    <span style={{ color: '#c0392b' }}>⚠️ Sem comanda correspondente</span>
+                                    {item.possivelDuplicata && (
+                                      <span style={{ color: '#c0392b' }}> (parece já lançada antes)</span>
+                                    )}
+                                    <br />
+                                    <button onClick={() => lancarVendaSemComanda(item, d)} className="btn-pagar" style={{ marginTop: 4 }}>
+                                      Lançar na Conta Corrente
+                                    </button>
+                                  </>
                                 )}
                               </td>
                             </tr>
