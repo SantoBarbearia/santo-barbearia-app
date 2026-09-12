@@ -247,17 +247,67 @@ export function parseSicrediPagamentosDetalhado(linhas) {
   // "ordem" guarda a posição da linha no relatório (a Sicredi exporta em
   // ordem cronológica) — usado só pra desempatar a ordem de exibição na
   // Visão Geral quando duas vendas caem na mesma data de pagamento.
+  //
+  // "categoria" e "chaveDeposito" usam a MESMA fórmula de agrupamento do
+  // parseSicrediPagamentos (por data de pagamento + categoria + bandeira) —
+  // é o que bate com uma linha só do extrato (ex: "SICREDI CREDITO MASTER")
+  // — pra permitir "abrir" esse valor agrupado e ver quais vendas (uma por
+  // linha aqui) somam exatamente aquele depósito.
   return dados
-    .map((r, i) => ({
-      id: novoId('pagdet'),
-      data: paraDataISO(r[0]),
-      codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
-      bandeira: r[15],
-      valorBruto: parseValorBR(r[18]) || 0,
-      valorLiquido: parseValorBR(r[22]) || 0,
-      ordem: i
-    }))
-    .filter((r) => r.data && r.codigoAutorizacao);
+    .map((r, i) => {
+      const tipoPagamento = r[2];
+      const tipoTransacao = r[14];
+      const categoria = tipoPagamento === 'Antecipação Automática' ? 'Antecipação' : (tipoTransacao === 'Débito' ? 'Débito' : 'Crédito');
+      const bandeira = r[15];
+      const dataVenda = paraDataISO(r[3]);
+      const horaMatch = String(r[4] || '').match(/^(\d{2}:\d{2})/);
+      return {
+        id: novoId('pagdet'),
+        data: paraDataISO(r[0]),
+        chaveDeposito: `${r[0]}|${categoria}|${bandeira}`,
+        categoria,
+        bandeira,
+        dataVenda,
+        dataHoraVenda: dataVenda && horaMatch ? `${dataVenda}T${horaMatch[1]}:00` : null,
+        codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
+        valorBruto: parseValorBR(r[18]) || 0,
+        valorLiquido: parseValorBR(r[22]) || 0,
+        ordem: i
+      };
+    })
+    .filter((r) => r.data);
+}
+
+// Reagrupa o Relatório de Pagamentos exatamente como parseSicrediPagamentos
+// (mesma chave: data de pagamento + categoria + bandeira), mas mantendo cada
+// venda/parcela individual dentro do grupo — pra poder "abrir" um depósito
+// tipo "Maquininha - Crédito Mastercard" e mostrar, venda a venda, o bruto,
+// a taxa e o líquido que somados batem com o valor único que cai no extrato.
+export function agruparPagamentosPorDeposito(pagamentosDetalhado) {
+  const grupos = new Map();
+  (pagamentosDetalhado || []).forEach((p) => {
+    if (!grupos.has(p.chaveDeposito)) {
+      grupos.set(p.chaveDeposito, {
+        id: novoId('deposito'),
+        chave: p.chaveDeposito,
+        data: p.data,
+        categoria: p.categoria,
+        bandeira: p.bandeira,
+        descricao: `Maquininha - ${p.categoria} ${p.bandeira}`,
+        valorBrutoTotal: 0,
+        valorLiquidoTotal: 0,
+        itens: []
+      });
+    }
+    const g = grupos.get(p.chaveDeposito);
+    g.valorBrutoTotal = Math.round((g.valorBrutoTotal + p.valorBruto) * 100) / 100;
+    g.valorLiquidoTotal = Math.round((g.valorLiquidoTotal + p.valorLiquido) * 100) / 100;
+    g.itens.push(p);
+  });
+
+  return Array.from(grupos.values())
+    .filter((g) => g.valorLiquidoTotal > 0)
+    .map((g) => ({ ...g, itens: [...g.itens].sort((a, b) => a.ordem - b.ordem) }));
 }
 
 // Liga cada Venda ao(s) Pagamento(s) correspondente(s) pelo "Código de
