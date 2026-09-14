@@ -91,7 +91,7 @@ function obterDimensoesImagem(dataUrl) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('visao-geral');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   const [carregando, setCarregando] = useState(false);
 
@@ -136,6 +136,7 @@ export default function App() {
   const [notas, setNotas] = useState([]);
   const [categorias, setCategorias] = useState([]);
   const [dadosEmpresa, setDadosEmpresa] = useState(DADOS_EMPRESA_VAZIO);
+  const [faturamentoManual, setFaturamentoManual] = useState([]);
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -167,7 +168,8 @@ export default function App() {
         supabase.from('fechamentos').select('*'),
         supabase.from('notas_dashboard').select('*'),
         supabase.from('categorias_contabeis').select('*'),
-        supabase.from('dados_empresa').select('*').single()
+        supabase.from('dados_empresa').select('*').single(),
+        supabase.from('faturamento_manual').select('*')
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -181,7 +183,8 @@ export default function App() {
         { data: fechamentosData },
         { data: notasData },
         { data: categoriasData },
-        { data: dadosEmpresaData }
+        { data: dadosEmpresaData },
+        { data: faturamentoManualData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -202,6 +205,9 @@ export default function App() {
       if (notasData) setNotas(notasData);
       if (categoriasData) setCategorias(categoriasData);
       if (dadosEmpresaData) setDadosEmpresa(paraEstadoDadosEmpresa(dadosEmpresaData));
+      if (faturamentoManualData) {
+        setFaturamentoManual(faturamentoManualData.map((l) => ({ mes: l.mes, faturamentoProdutos: parseFloat(l.faturamento_produtos) || 0 })));
+      }
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
@@ -1204,6 +1210,27 @@ export default function App() {
     }
   };
 
+  // Faturamento de Produtos digitado no Resumo para Contabilidade — mesmo
+  // esquema de salvamento dedicado dos Dados da Empresa (tabela própria,
+  // pode ainda não existir em quem não rodou a migração).
+  const handleSalvarFaturamentoProdutos = async (mes, valor) => {
+    const novaLista = [...faturamentoManual.filter((f) => f.mes !== mes), { mes, faturamentoProdutos: valor }];
+    setFaturamentoManual(novaLista);
+    try {
+      const resultado = await supabase.from('faturamento_manual').upsert([{ mes, faturamento_produtos: valor }]);
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao salvar faturamento de produtos:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar o Faturamento de Produtos no banco de dados!\n\n' +
+        'O que você acabou de digitar está aparecendo na tela, mas ainda NÃO foi salvo de verdade.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
+        'database/migracao_faturamento_manual.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
+      );
+    }
+  };
+
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
     const nivel1Formatado = capitalizarTexto(nivel1.trim());
@@ -1509,12 +1536,13 @@ export default function App() {
 
         <div className="tabs">
           {[
+            { id: 'dashboard', label: 'Dashboard' },
             { id: 'visao-geral', label: 'Visão Geral' },
             { id: 'contas-pagar', label: 'Contas a Pagar' },
             { id: 'comissoes', label: 'Comissões' },
             { id: 'transferencias', label: 'Transferências' },
             { id: 'conciliacao', label: 'Conciliação' },
-            { id: 'dashboard', label: 'Dashboard' }
+            { id: 'parametros', label: 'Parâmetros' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -2222,10 +2250,18 @@ export default function App() {
                 contasAPagar={contasAPagar}
                 fechamentos={fechamentos}
                 notas={notas}
+                movimentacoes={movimentacoes}
+                faturamentoManual={faturamentoManual}
+                onSalvarFaturamentoProdutos={handleSalvarFaturamentoProdutos}
                 onFecharMes={handleFecharMes}
                 onAdicionarNota={handleAdicionarNota}
                 onExcluirNota={handleExcluirNota}
               />
+            </div>
+          )}
+
+          {activeTab === 'parametros' && (
+            <div>
               <GerenciarCategorias
                 categorias={categorias}
                 onAdicionar={handleAdicionarCategoria}
