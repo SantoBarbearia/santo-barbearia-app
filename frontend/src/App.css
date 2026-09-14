@@ -644,6 +644,7 @@ body {
 .input-group {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .input-group label {
@@ -706,6 +707,7 @@ body {
 
 .categoria-select-duplo select {
   flex: 1;
+  min-width: 0;
   padding: 8px;
   border: 1px solid #ddd;
   border-radius: 4px;
