@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import Conciliacao from './Conciliacao';
 import Dashboard from './Dashboard';
 import CategoriaSelect from './CategoriaSelect';
 import GerenciarCategorias from './GerenciarCategorias';
+import DadosEmpresa from './DadosEmpresa';
 import { capitalizarTexto } from './utils/texto';
 import './App.css';
 
@@ -41,6 +44,50 @@ function desachatarComissoes(linha) {
     });
   });
   return aninhado;
+}
+
+const DADOS_EMPRESA_VAZIO = {
+  razaoSocial: '', cnpj: '', endereco: '', responsavelAdm: '',
+  telefoneComercial: '', telefoneResponsavel: '', logo: null
+};
+
+// A tabela "dados_empresa" no Supabase usa snake_case (razao_social, ...);
+// o estado do app usa camelCase — essas funções convertem entre os dois.
+function paraEstadoDadosEmpresa(linha) {
+  if (!linha) return DADOS_EMPRESA_VAZIO;
+  return {
+    razaoSocial: linha.razao_social || '',
+    cnpj: linha.cnpj || '',
+    endereco: linha.endereco || '',
+    responsavelAdm: linha.responsavel_adm || '',
+    telefoneComercial: linha.telefone_comercial || '',
+    telefoneResponsavel: linha.telefone_responsavel || '',
+    logo: linha.logo || null
+  };
+}
+
+function paraLinhaDadosEmpresa(estado) {
+  return {
+    id: 1,
+    razao_social: estado.razaoSocial || '',
+    cnpj: estado.cnpj || '',
+    endereco: estado.endereco || '',
+    responsavel_adm: estado.responsavelAdm || '',
+    telefone_comercial: estado.telefoneComercial || '',
+    telefone_responsavel: estado.telefoneResponsavel || '',
+    logo: estado.logo || null
+  };
+}
+
+// Descobre a largura/altura reais de uma imagem (data URL) — usado pra
+// desenhar a logo no PDF/Excel do tamanho certo, sem esticar ou distorcer.
+function obterDimensoesImagem(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ largura: img.naturalWidth, altura: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
 }
 
 export default function App() {
@@ -88,6 +135,7 @@ export default function App() {
   const [fechamentos, setFechamentos] = useState([]);
   const [notas, setNotas] = useState([]);
   const [categorias, setCategorias] = useState([]);
+  const [dadosEmpresa, setDadosEmpresa] = useState(DADOS_EMPRESA_VAZIO);
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -118,7 +166,8 @@ export default function App() {
         supabase.from('movimentacoes').select('*'),
         supabase.from('fechamentos').select('*'),
         supabase.from('notas_dashboard').select('*'),
-        supabase.from('categorias_contabeis').select('*')
+        supabase.from('categorias_contabeis').select('*'),
+        supabase.from('dados_empresa').select('*').single()
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -131,7 +180,8 @@ export default function App() {
         { data: movimentacoesData },
         { data: fechamentosData },
         { data: notasData },
-        { data: categoriasData }
+        { data: categoriasData },
+        { data: dadosEmpresaData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -151,6 +201,7 @@ export default function App() {
       if (fechamentosData) setFechamentos(fechamentosData);
       if (notasData) setNotas(notasData);
       if (categoriasData) setCategorias(categoriasData);
+      if (dadosEmpresaData) setDadosEmpresa(paraEstadoDadosEmpresa(dadosEmpresaData));
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
@@ -395,40 +446,16 @@ export default function App() {
 
   // Gera uma planilha Excel com o resumo, as movimentações e as contas a pagar
   // do período/conta filtrados na Visão Geral, pra mandar pro contador.
-  const handleExportarRelatorio = async () => {
-    // Formato "contábil" do Excel (símbolo de moeda alinhado à esquerda da
-    // célula, valor à direita, negativos com sinal de menos antes do R$).
-    const FORMATO_CONTABIL = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
-    const aplicarFormatoContabil = (ws, colunas, primeiraLinha, ultimaLinha) => {
-      for (let linha = primeiraLinha; linha <= ultimaLinha; linha++) {
-        colunas.forEach((coluna) => {
-          const ref = `${coluna}${linha}`;
-          if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = FORMATO_CONTABIL;
-        });
-      }
-    };
+  // Formato "contábil" do Excel (símbolo de moeda alinhado à esquerda da
+  // célula, valor à direita, negativos com sinal de menos antes do R$).
+  const FORMATO_CONTABIL = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
 
+  // Monta os dados do relatório do jeito que Excel e PDF precisam — os dois
+  // formatos mostram exatamente o mesmo conteúdo, só em layouts diferentes.
+  const montarDadosRelatorio = () => {
     const periodoLabel = (vgInicio || vgFim)
       ? `${vgInicio ? isoParaBR(vgInicio) : 'início'} até ${vgFim ? isoParaBR(vgFim) : 'hoje'}`
       : 'Todo o período';
-
-    const linhasResumo = [
-      ['Santo Barbearia - Relatório Financeiro'],
-      ['Período', periodoLabel],
-      ['Tipo de Conta', vgTipoConta === 'todas' ? 'Todas' : nomesContas[vgTipoConta]],
-      ['Gerado em', new Date().toLocaleString('pt-BR')],
-      [],
-      ['Total a Pagar (contas em aberto no período)', totalAPagarVG],
-      ['Quantidade de Contas Abertas', abertasVG.length],
-      [],
-      ['Saldo do Período por Conta'],
-      ['Conta', 'Saldo Anterior', 'Entradas', 'Saídas', 'Saldo do Período', 'Saldo Final'],
-      ...saldoPorContaVG.map(l => [l.nome, l.saldoAnterior, l.entradas, -l.saidas, l.saldo, l.saldoFinal]),
-      ['Total', saldoPorContaVG.reduce((s, l) => s + l.saldoAnterior, 0), saldoPorContaVG.reduce((s, l) => s + l.entradas, 0), -saldoPorContaVG.reduce((s, l) => s + l.saidas, 0), saldoPorContaVG.reduce((s, l) => s + l.saldo, 0), saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0)]
-    ];
-    const wsResumo = XLSX.utils.aoa_to_sheet(linhasResumo);
-    aplicarFormatoContabil(wsResumo, ['B'], 6, 6);
-    aplicarFormatoContabil(wsResumo, ['B', 'C', 'D', 'E', 'F'], 11, 11 + saldoPorContaVG.length);
 
     const movimentacoesOrdenadas = [...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id);
 
@@ -436,12 +463,12 @@ export default function App() {
     // o final) em vez de misturar todas as contas juntas — só assim o saldo
     // parcial de cada linha faz sentido e dá pra achar exatamente onde bateu
     // errado, comparando linha a linha com o extrato do banco.
-    const blocosPorConta = saldoPorContaVG.flatMap((l) => {
+    const blocosPorConta = saldoPorContaVG.map((l) => {
       const movsDaConta = movimentacoesOrdenadas.filter((m) => (
         m.tipo === 'Transferência' ? (m.de === l.chave || m.para === l.chave) : m.conta === l.chave
       ));
       let saldoCorrente = l.saldoAnterior;
-      const linhasTransacoes = movsDaConta.map((m) => {
+      const transacoes = movsDaConta.map((m) => {
         let valorComSinal;
         let tipoLabel;
         if (m.tipo === 'Transferência') {
@@ -454,46 +481,350 @@ export default function App() {
           tipoLabel = tipoVisual === 'entrada' ? 'Entrada' : 'Saída';
         }
         saldoCorrente += valorComSinal;
-        return [
-          formatarDataMovParaExibir(m.data),
-          tipoLabel,
-          m.descricao,
-          m.categoria || '',
-          m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
-          valorComSinal,
-          saldoCorrente
-        ];
+        return {
+          data: formatarDataMovParaExibir(m.data),
+          tipo: tipoLabel,
+          descricao: m.descricao,
+          categoria: m.categoria || '',
+          conta: m.tipo === 'Transferência' ? `${nomesContas[m.de]} → ${nomesContas[m.para]}` : (nomesContas[m.conta] || ''),
+          valor: valorComSinal,
+          saldoParcial: saldoCorrente
+        };
       });
-      return [
-        ['', '', '', 'Saldo Anterior', l.nome, l.saldoAnterior, l.saldoAnterior],
-        ...linhasTransacoes,
-        ['', '', '', 'Saldo Final', l.nome, l.saldoFinal, l.saldoFinal],
-        ['', '', '', '', '', '', '']
-      ];
+      return { nome: l.nome, saldoAnterior: l.saldoAnterior, saldoFinal: l.saldoFinal, transacoes };
     });
 
-    const linhasMov = [
-      ['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor', 'Saldo Parcial'],
-      ...blocosPorConta,
-      ['', '', '', '', 'Total Geral', saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0), '']
-    ];
-    const wsMov = XLSX.utils.aoa_to_sheet(linhasMov);
-    aplicarFormatoContabil(wsMov, ['F', 'G'], 2, linhasMov.length);
+    return {
+      periodoLabel,
+      tipoContaLabel: vgTipoConta === 'todas' ? 'Todas' : nomesContas[vgTipoConta],
+      geradoEm: new Date().toLocaleString('pt-BR'),
+      totalAPagar: totalAPagarVG,
+      qtdContasAbertas: abertasVG.length,
+      saldoPorConta: saldoPorContaVG,
+      totalSaldoFinal: saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0),
+      blocosPorConta,
+      contasAPagarLinhas: contasAPagarVG.map(c => ({
+        descricao: c.descricao, categoria: c.categoria || '', vencimento: c.vencimento,
+        valor: c.valor, status: c.status, pagaCom: c.conta ? (nomesContas[c.conta] || '') : ''
+      }))
+    };
+  };
 
-    const linhasContas = [
-      ['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com'],
-      ...contasAPagarVG.map(c => [c.descricao, c.categoria || '', c.vencimento, c.valor, c.status, c.conta ? (nomesContas[c.conta] || '') : ''])
-    ];
-    const wsContas = XLSX.utils.aoa_to_sheet(linhasContas);
-    aplicarFormatoContabil(wsContas, ['D'], 2, linhasContas.length);
+  // Linhas de texto com os dados cadastrados em "Dados da Empresa" — vazio
+  // quando ela ainda não preencheu nada, pra não aparecer "CNPJ: " sem valor.
+  const linhasCabecalhoEmpresa = () => ([
+    dadosEmpresa.razaoSocial,
+    dadosEmpresa.cnpj ? `CNPJ: ${dadosEmpresa.cnpj}` : '',
+    dadosEmpresa.endereco,
+    dadosEmpresa.responsavelAdm ? `Responsável Adm.: ${dadosEmpresa.responsavelAdm}` : '',
+    dadosEmpresa.telefoneComercial ? `Tel. Comercial: ${dadosEmpresa.telefoneComercial}` : '',
+    dadosEmpresa.telefoneResponsavel ? `Tel. Responsável: ${dadosEmpresa.telefoneResponsavel}` : ''
+  ].filter(Boolean));
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo');
-    XLSX.utils.book_append_sheet(wb, wsMov, 'Movimentações');
-    XLSX.utils.book_append_sheet(wb, wsContas, 'Contas a Pagar');
+  const baixarArquivo = (blob, nomeArquivo) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nomeArquivo;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
+  const handleExportarRelatorio = async () => {
+    const dadosRel = montarDadosRelatorio();
+    const cabecalhoEmpresa = linhasCabecalhoEmpresa();
+    const dimensoesLogo = dadosEmpresa.logo ? await obterDimensoesImagem(dadosEmpresa.logo).catch(() => null) : null;
+
+    const workbook = new ExcelJS.Workbook();
+
+    // Escreve célula a célula com um cursor de linha manual (em vez de
+    // aoa_to_sheet) pra poder empurrar o conteúdo pra baixo quando tem
+    // logo/dados da empresa pra caber em cima, sem bagunçar o resto.
+    const escreverCabecalhoEmpresa = (worksheet, colunaTexto) => {
+      if (dadosEmpresa.logo && dimensoesLogo) {
+        const extensaoMatch = dadosEmpresa.logo.match(/^data:image\/(\w+);/);
+        let extensao = (extensaoMatch?.[1] || 'png').toLowerCase();
+        if (extensao === 'jpg') extensao = 'jpeg';
+        if (!['png', 'jpeg', 'gif'].includes(extensao)) extensao = 'png';
+        const imageId = workbook.addImage({ base64: dadosEmpresa.logo, extension: extensao });
+        const ALTURA_MAX_PX = 80;
+        const escala = Math.min(1, ALTURA_MAX_PX / dimensoesLogo.altura);
+        worksheet.addImage(imageId, {
+          tl: { col: 0, row: 0 },
+          ext: { width: dimensoesLogo.largura * escala, height: dimensoesLogo.altura * escala }
+        });
+      }
+      cabecalhoEmpresa.forEach((texto, i) => {
+        worksheet.getCell(i + 1, colunaTexto).value = texto;
+      });
+      if (cabecalhoEmpresa[0]) worksheet.getCell(1, colunaTexto).font = { bold: true, size: 13 };
+      const temCabecalho = dadosEmpresa.logo || cabecalhoEmpresa.length > 0;
+      return temCabecalho ? Math.max(cabecalhoEmpresa.length, dadosEmpresa.logo ? 5 : 0) + 2 : 1;
+    };
+
+    // --- Aba Resumo ---
+    const wsResumo = workbook.addWorksheet('Resumo');
+    wsResumo.columns = [{ width: 38 }, { width: 16 }, { width: 16 }, { width: 20 }, { width: 18 }, { width: 16 }];
+    let r = escreverCabecalhoEmpresa(wsResumo, 4);
+
+    const linha = (valores, colunasMoeda = []) => {
+      valores.forEach((v, i) => { wsResumo.getCell(r, i + 1).value = v; });
+      colunasMoeda.forEach((c) => { wsResumo.getCell(r, c).numFmt = FORMATO_CONTABIL; });
+      r++;
+    };
+    wsResumo.getCell(r, 1).value = 'Santo Barbearia - Relatório Financeiro';
+    wsResumo.getCell(r, 1).font = { bold: true, size: 14 };
+    r++;
+    linha(['Período', dadosRel.periodoLabel]);
+    linha(['Tipo de Conta', dadosRel.tipoContaLabel]);
+    linha(['Gerado em', dadosRel.geradoEm]);
+    r++;
+    linha(['Total a Pagar (contas em aberto no período)', dadosRel.totalAPagar], [2]);
+    linha(['Quantidade de Contas Abertas', dadosRel.qtdContasAbertas]);
+    r++;
+    wsResumo.getCell(r, 1).value = 'Saldo do Período por Conta';
+    wsResumo.getCell(r, 1).font = { bold: true };
+    r++;
+    linha(['Conta', 'Saldo Anterior', 'Entradas', 'Saídas', 'Saldo do Período', 'Saldo Final']);
+    wsResumo.getRow(r - 1).font = { bold: true };
+    dadosRel.saldoPorConta.forEach((l) => linha([l.nome, l.saldoAnterior, l.entradas, -l.saidas, l.saldo, l.saldoFinal], [2, 3, 4, 5, 6]));
+    linha([
+      'Total',
+      dadosRel.saldoPorConta.reduce((s, l) => s + l.saldoAnterior, 0),
+      dadosRel.saldoPorConta.reduce((s, l) => s + l.entradas, 0),
+      -dadosRel.saldoPorConta.reduce((s, l) => s + l.saidas, 0),
+      dadosRel.saldoPorConta.reduce((s, l) => s + l.saldo, 0),
+      dadosRel.totalSaldoFinal
+    ], [2, 3, 4, 5, 6]);
+
+    // --- Aba Movimentações ---
+    const wsMov = workbook.addWorksheet('Movimentações');
+    wsMov.columns = [{ width: 12 }, { width: 20 }, { width: 40 }, { width: 26 }, { width: 22 }, { width: 16 }, { width: 16 }];
+    let rMov = escreverCabecalhoEmpresa(wsMov, 4);
+    const linhaMov = (valores, colunasMoeda = []) => {
+      valores.forEach((v, i) => { wsMov.getCell(rMov, i + 1).value = v; });
+      colunasMoeda.forEach((c) => { wsMov.getCell(rMov, c).numFmt = FORMATO_CONTABIL; });
+      rMov++;
+    };
+    linhaMov(['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor', 'Saldo Parcial']);
+    wsMov.getRow(rMov - 1).font = { bold: true };
+    dadosRel.blocosPorConta.forEach((bloco) => {
+      linhaMov(['', '', '', 'Saldo Anterior', bloco.nome, bloco.saldoAnterior, bloco.saldoAnterior], [6, 7]);
+      bloco.transacoes.forEach((t) => linhaMov([t.data, t.tipo, t.descricao, t.categoria, t.conta, t.valor, t.saldoParcial], [6, 7]));
+      linhaMov(['', '', '', 'Saldo Final', bloco.nome, bloco.saldoFinal, bloco.saldoFinal], [6, 7]);
+      linhaMov(['', '', '', '', '', '', '']);
+    });
+    linhaMov(['', '', '', '', 'Total Geral', dadosRel.totalSaldoFinal, ''], [6]);
+
+    // --- Aba Contas a Pagar ---
+    const wsContas = workbook.addWorksheet('Contas a Pagar');
+    wsContas.columns = [{ width: 40 }, { width: 26 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 22 }];
+    let rContas = escreverCabecalhoEmpresa(wsContas, 4);
+    const linhaContas = (valores, colunasMoeda = []) => {
+      valores.forEach((v, i) => { wsContas.getCell(rContas, i + 1).value = v; });
+      colunasMoeda.forEach((c) => { wsContas.getCell(rContas, c).numFmt = FORMATO_CONTABIL; });
+      rContas++;
+    };
+    linhaContas(['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com']);
+    wsContas.getRow(rContas - 1).font = { bold: true };
+    dadosRel.contasAPagarLinhas.forEach((c) => linhaContas([c.descricao, c.categoria, c.vencimento, c.valor, c.status, c.pagaCom], [4]));
+
+    const buffer = await workbook.xlsx.writeBuffer();
     const nomeArquivo = `relatorio-santo-barbearia-${new Date().toISOString().slice(0, 10)}.xlsx`;
-    XLSX.writeFile(wb, nomeArquivo);
+    baixarArquivo(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nomeArquivo);
+  };
+
+  const handleExportarRelatorioPDF = async () => {
+    const dadosRel = montarDadosRelatorio();
+    const cabecalhoEmpresa = linhasCabecalhoEmpresa();
+    const dimensoesLogo = dadosEmpresa.logo ? await obterDimensoesImagem(dadosEmpresa.logo).catch(() => null) : null;
+
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const MARGEM = 14;
+    const LARGURA_PAGINA = doc.internal.pageSize.getWidth();
+    const ALTURA_PAGINA = doc.internal.pageSize.getHeight();
+    const formatarMoedaPDF = (v) => `${v < 0 ? '-' : ''}R$ ${Math.abs(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    // --- Cabeçalho (logo + dados da empresa) ---
+    let xTexto = MARGEM;
+    let yLinhaEmpresa = MARGEM + 4;
+    if (dadosEmpresa.logo && dimensoesLogo) {
+      const ALTURA_MAX_MM = 20;
+      const LARGURA_MAX_MM = 45;
+      const escala = Math.min(LARGURA_MAX_MM / dimensoesLogo.largura, ALTURA_MAX_MM / dimensoesLogo.altura, 1);
+      const larguraLogo = dimensoesLogo.largura * escala;
+      const alturaLogo = dimensoesLogo.altura * escala;
+      const extensaoMatch = dadosEmpresa.logo.match(/^data:image\/(\w+);/);
+      let formato = (extensaoMatch?.[1] || 'png').toUpperCase();
+      if (formato === 'JPG') formato = 'JPEG';
+      try {
+        doc.addImage(dadosEmpresa.logo, formato, MARGEM, MARGEM, larguraLogo, alturaLogo);
+        xTexto = MARGEM + larguraLogo + 6;
+      } catch (e) {
+        console.error('Não foi possível desenhar a logo no PDF:', e);
+      }
+    }
+    if (cabecalhoEmpresa.length > 0) {
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(12);
+      doc.text(cabecalhoEmpresa[0], xTexto, yLinhaEmpresa);
+      yLinhaEmpresa += 5;
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(90);
+      cabecalhoEmpresa.slice(1).forEach((texto) => {
+        doc.text(texto, xTexto, yLinhaEmpresa);
+        yLinhaEmpresa += 4;
+      });
+      doc.setTextColor(0);
+    }
+
+    let y = Math.max(yLinhaEmpresa + 4, MARGEM + (dadosEmpresa.logo ? 24 : 0) + 6);
+    doc.setDrawColor(9, 74, 0);
+    doc.setLineWidth(0.6);
+    doc.line(MARGEM, y, LARGURA_PAGINA - MARGEM, y);
+    y += 8;
+
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(15);
+    doc.text('Relatório Financeiro', MARGEM, y);
+    y += 7;
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(10);
+    doc.text(`Período: ${dadosRel.periodoLabel}`, MARGEM, y);
+    doc.text(`Tipo de Conta: ${dadosRel.tipoContaLabel}`, LARGURA_PAGINA / 2, y);
+    y += 5;
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(`Gerado em ${dadosRel.geradoEm}`, MARGEM, y);
+    doc.setTextColor(0);
+    y += 8;
+
+    const garantirEspaco = (alturaNecessaria) => {
+      if (y + alturaNecessaria > ALTURA_PAGINA - MARGEM) {
+        doc.addPage();
+        y = MARGEM;
+      }
+    };
+
+    // --- Resumo ---
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    garantirEspaco(10);
+    doc.text('Resumo', MARGEM, y);
+    y += 6;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGEM, right: MARGEM },
+      styles: { fontSize: 9 },
+      theme: 'plain',
+      body: [
+        ['Total a Pagar (contas em aberto no período)', formatarMoedaPDF(dadosRel.totalAPagar)],
+        ['Quantidade de Contas Abertas', String(dadosRel.qtdContasAbertas)]
+      ]
+    });
+    y = doc.lastAutoTable.finalY + 4;
+
+    garantirEspaco(20);
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGEM, right: MARGEM },
+      styles: { fontSize: 8.5 },
+      headStyles: { fillColor: [9, 74, 0] },
+      head: [['Conta', 'Saldo Anterior', 'Entradas', 'Saídas', 'Saldo do Período', 'Saldo Final']],
+      body: [
+        ...dadosRel.saldoPorConta.map(l => [l.nome, formatarMoedaPDF(l.saldoAnterior), formatarMoedaPDF(l.entradas), formatarMoedaPDF(-l.saidas), formatarMoedaPDF(l.saldo), formatarMoedaPDF(l.saldoFinal)]),
+        [
+          { content: 'Total', styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.saldoPorConta.reduce((s, l) => s + l.saldoAnterior, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.saldoPorConta.reduce((s, l) => s + l.entradas, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(-dadosRel.saldoPorConta.reduce((s, l) => s + l.saidas, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.saldoPorConta.reduce((s, l) => s + l.saldo, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.totalSaldoFinal), styles: { fontStyle: 'bold' } }
+        ]
+      ]
+    });
+    y = doc.lastAutoTable.finalY + 10;
+
+    // --- Movimentações (uma tabela por conta, igual ao Excel) ---
+    garantirEspaco(14);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Movimentações', MARGEM, y);
+    y += 6;
+
+    dadosRel.blocosPorConta.forEach((bloco) => {
+      if (bloco.transacoes.length === 0) return;
+      garantirEspaco(16);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(9.5);
+      doc.text(bloco.nome, MARGEM, y);
+      y += 4;
+
+      const corSaldo = [230, 240, 226];
+      autoTable(doc, {
+        startY: y,
+        margin: { left: MARGEM, right: MARGEM },
+        styles: { fontSize: 7.5 },
+        headStyles: { fillColor: [9, 74, 0] },
+        head: [['Data', 'Tipo', 'Descrição', 'Classificação Contábil', 'Conta', 'Valor', 'Saldo Parcial']],
+        body: [
+          [
+            { content: '', styles: { fillColor: corSaldo } }, { content: '', styles: { fillColor: corSaldo } }, { content: '', styles: { fillColor: corSaldo } },
+            { content: 'Saldo Anterior', styles: { fillColor: corSaldo, fontStyle: 'bold' } },
+            { content: bloco.nome, styles: { fillColor: corSaldo } },
+            { content: formatarMoedaPDF(bloco.saldoAnterior), styles: { fillColor: corSaldo, fontStyle: 'bold' } },
+            { content: formatarMoedaPDF(bloco.saldoAnterior), styles: { fillColor: corSaldo, fontStyle: 'bold' } }
+          ],
+          ...bloco.transacoes.map(t => [t.data, t.tipo, t.descricao, t.categoria, t.conta, formatarMoedaPDF(t.valor), formatarMoedaPDF(t.saldoParcial)]),
+          [
+            { content: '', styles: { fillColor: corSaldo } }, { content: '', styles: { fillColor: corSaldo } }, { content: '', styles: { fillColor: corSaldo } },
+            { content: 'Saldo Final', styles: { fillColor: corSaldo, fontStyle: 'bold' } },
+            { content: bloco.nome, styles: { fillColor: corSaldo } },
+            { content: formatarMoedaPDF(bloco.saldoFinal), styles: { fillColor: corSaldo, fontStyle: 'bold' } },
+            { content: formatarMoedaPDF(bloco.saldoFinal), styles: { fillColor: corSaldo, fontStyle: 'bold' } }
+          ]
+        ]
+      });
+      y = doc.lastAutoTable.finalY + 8;
+    });
+
+    garantirEspaco(10);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(10);
+    doc.text(`Total Geral: ${formatarMoedaPDF(dadosRel.totalSaldoFinal)}`, MARGEM, y);
+    y += 10;
+
+    // --- Contas a Pagar ---
+    if (dadosRel.contasAPagarLinhas.length > 0) {
+      garantirEspaco(16);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(11);
+      doc.text('Contas a Pagar', MARGEM, y);
+      y += 6;
+      autoTable(doc, {
+        startY: y,
+        margin: { left: MARGEM, right: MARGEM },
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [9, 74, 0] },
+        head: [['Descrição', 'Classificação Contábil', 'Vencimento', 'Valor', 'Status', 'Paga com']],
+        body: dadosRel.contasAPagarLinhas.map(c => [c.descricao, c.categoria, c.vencimento, formatarMoedaPDF(c.valor), c.status, c.pagaCom])
+      });
+    }
+
+    // Numeração de página em todas as páginas geradas.
+    const totalPaginas = doc.internal.getNumberOfPages();
+    for (let p = 1; p <= totalPaginas; p++) {
+      doc.setPage(p);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text(`Página ${p} de ${totalPaginas}`, LARGURA_PAGINA - MARGEM, ALTURA_PAGINA - 8, { align: 'right' });
+    }
+
+    doc.save(`relatorio-santo-barbearia-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const proximoVencimento = (dataBR) => {
@@ -850,6 +1181,29 @@ export default function App() {
     salvarDados({ notas: novasNotas });
   };
 
+  // Dados da empresa (logo + Razão Social/CNPJ/etc.) são salvos à parte da
+  // rotina principal (salvarDados) — mudam raramente e, ao contrário do
+  // resto, essa tabela pode ainda não existir em quem não rodou a migração
+  // (database/migracao_dados_empresa.sql) ainda; se estivesse dentro do
+  // salvarDados de todo mundo, um erro aqui dispararia o alerta de "não
+  // consegui salvar" em QUALQUER ação do sistema, mesmo sem relação com isso.
+  const handleSalvarDadosEmpresa = async (novoDados) => {
+    setDadosEmpresa(novoDados);
+    try {
+      const resultado = await supabase.from('dados_empresa').upsert([paraLinhaDadosEmpresa(novoDados)]);
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao salvar dados da empresa:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar os Dados da Empresa no banco de dados!\n\n' +
+        'O que você acabou de digitar está aparecendo na tela, mas ainda NÃO foi salvo de verdade.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
+        'database/migracao_dados_empresa.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
+      );
+    }
+  };
+
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
     const nivel1Formatado = capitalizarTexto(nivel1.trim());
@@ -1132,6 +1486,7 @@ export default function App() {
     <div className="app">
       <div className="container">
         <header className="header">
+          {dadosEmpresa.logo && <img src={dadosEmpresa.logo} alt="Logo" className="logo-header" />}
           <h1>Santo Barbearia - Controle Financeiro</h1>
           <p className="subtitle">Agosto 2026</p>
         </header>
@@ -1285,8 +1640,11 @@ export default function App() {
                   <button onClick={handleExportarRelatorio} className="btn-transferir">
                     Exportar Relatório (Excel)
                   </button>
+                  <button onClick={handleExportarRelatorioPDF} className="btn-transferir">
+                    Exportar Relatório (PDF)
+                  </button>
                 </div>
-                <p className="upload-dica">Gera uma planilha com o resumo, as movimentações e as contas a pagar do período/conta filtrados acima — pronta pra mandar pro contador.</p>
+                <p className="upload-dica">Gera o resumo, as movimentações e as contas a pagar do período/conta filtrados acima, com a logo e os dados da empresa (cadastrados no Dashboard) — pronto pra mandar pro contador.</p>
               </div>
 
               <div className="card">
@@ -1872,6 +2230,10 @@ export default function App() {
                 categorias={categorias}
                 onAdicionar={handleAdicionarCategoria}
                 onExcluir={handleExcluirCategoria}
+              />
+              <DadosEmpresa
+                dadosEmpresa={dadosEmpresa}
+                onSalvar={handleSalvarDadosEmpresa}
               />
             </div>
           )}
