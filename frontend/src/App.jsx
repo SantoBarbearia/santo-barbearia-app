@@ -82,7 +82,7 @@ export default function App() {
     valor: 0,
     data: new Date().toISOString().split('T')[0]
   });
-  const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '', categoria: '' });
+  const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '', categoria: '', data: new Date().toISOString().slice(0, 10) });
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
   const [fechamentos, setFechamentos] = useState([]);
@@ -767,14 +767,15 @@ export default function App() {
 
   const handleAjustarSaldo = () => {
     const valor = parseFloat(ajuste.valor);
-    if (!(valor > 0)) return;
+    if (!(valor > 0) || !ajuste.data) return;
 
     const delta = ajuste.tipo === 'credito' ? valor : -valor;
     const novasContas = { ...contas, [ajuste.conta]: contas[ajuste.conta] + delta };
 
+    const [ano, mes, dia] = ajuste.data.split('-');
     const novaMovimentacao = {
       id: Date.now(),
-      data: new Date().toLocaleDateString('pt-BR'),
+      data: `${dia}/${mes}/${ano}`,
       tipo: ajuste.tipo === 'credito' ? 'Crédito Manual' : 'Débito Manual',
       descricao: capitalizarTexto(ajuste.descricao.trim()) || (ajuste.tipo === 'credito' ? 'Crédito manual' : 'Débito manual'),
       valor,
@@ -1210,6 +1211,18 @@ export default function App() {
                     />
                   </div>
                   <div className="input-group">
+                    <label>Data</label>
+                    <input
+                      type="date"
+                      value={ajuste.data}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v && !anoValido(v)) return;
+                        setAjuste({ ...ajuste, data: v });
+                      }}
+                    />
+                  </div>
+                  <div className="input-group">
                     <label>Classificação Contábil</label>
                     <CategoriaSelect
                       categorias={categorias}
@@ -1219,7 +1232,7 @@ export default function App() {
                   </div>
                   <button
                     onClick={handleAjustarSaldo}
-                    disabled={!(parseFloat(ajuste.valor) > 0)}
+                    disabled={!(parseFloat(ajuste.valor) > 0) || !ajuste.data}
                     className="btn-transferir"
                   >
                     Registrar
