@@ -11,6 +11,7 @@ import {
   parseSicrediPagamentosDetalhado,
   parseSicrediPagamentosComoVendas,
   agruparPagamentosPorDeposito,
+  normalizarBandeira,
   parseSicrediVendas,
   ligarVendasComPagamentos,
   parseBalancoSistema,
@@ -393,7 +394,27 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const passo2b = conciliar([...passo2.semParA, ...semParAOutros], lancamentosManuaisEntrada);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
     const passo3b = conciliar(passo3.semParA, lancamentosManuaisSaida);
-    const passo4 = conciliar(vendas, sistemaCartao);
+    // Casamento de cartão exige, além de valor+horário próximo, que o tipo
+    // (Débito/Crédito) e a bandeira também batam — duas vendas de mesmo valor
+    // no mesmo horário mas de bandeiras/tipos diferentes não deviam casar
+    // entre si. A bandeira do Sistema vem em GRUPO (ex: "Visa e Master"), não
+    // individual, então o critério é a bandeira da venda estar dentro desse
+    // grupo. Quando falta essa informação de um dos lados, não bloqueia (mantém
+    // o comportamento antigo, só por valor+horário).
+    // A coluna "Tipo transação" da maquininha traz o texto cru ("Débito",
+    // "Crédito à vista", "Crédito parcelado lojista"...) — reduz ao mesmo
+    // Débito/Crédito que o Sistema usa, pra poder comparar.
+    const tipoTransacaoNormalizado = (texto) => (/^d[ée]bito/i.test(String(texto || '').trim()) ? 'Débito' : 'Crédito');
+    const cartaoCompativel = (venda, sistema) => {
+      if (!sistema.tipoCartao && (!sistema.bandeirasCartao || sistema.bandeirasCartao.length === 0)) return true;
+      if (venda.tipoTransacao && sistema.tipoCartao && tipoTransacaoNormalizado(venda.tipoTransacao) !== sistema.tipoCartao) return false;
+      if (venda.bandeira && sistema.bandeirasCartao && sistema.bandeirasCartao.length > 0) {
+        const bandeiraVenda = normalizarBandeira(venda.bandeira);
+        if (bandeiraVenda && !sistema.bandeirasCartao.includes(bandeiraVenda)) return false;
+      }
+      return true;
+    };
+    const passo4 = conciliar(vendas, sistemaCartao, 3, { compativel: cartaoCompativel });
 
     // Prefere a taxa calculada a partir de Pagamentos (inclui antecipação); Vendas
     // só tem o desconto de MDR, então serve de estimativa quando só ele foi carregado.
