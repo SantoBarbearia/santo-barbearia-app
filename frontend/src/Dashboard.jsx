@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { separarCategoria } from './CategoriaSelect';
 
 const CORES = {
   azul: '#2a78d6',
@@ -18,6 +19,25 @@ function formatarMoeda(valor) {
 function formatarMoedaCompacta(valor) {
   if (Math.abs(valor) >= 1000) return `R$ ${(valor / 1000).toFixed(1)}k`;
   return `R$ ${Math.round(valor)}`;
+}
+
+// A tabela movimentacoes guarda a data em dois formatos dependendo de onde
+// foi criada (ISO yyyy-mm-dd ou BR dd/mm/yyyy) — normaliza pra ISO antes de
+// comparar com o mês selecionado.
+function dataMovParaISO(data) {
+  if (!data) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(data)) return data;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) {
+    const [dia, mes, ano] = data.split('/');
+    return `${ano}-${mes}-${dia}`;
+  }
+  return data;
+}
+
+function tipoVisualMovimentacao(mov) {
+  if (mov.tipo === 'Transferência') return 'transferencia';
+  if (mov.tipo === 'Despesa Paga' || mov.tipo === 'Débito Manual') return 'saida';
+  return 'entrada';
 }
 
 function GraficoLinhaFaturamento({ fechamentos }) {
@@ -94,16 +114,20 @@ function GraficoBarrasDespesas({ contasAPagar }) {
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
 
-  const dentroDoPeriodo = (vencimentoBR) => {
+  const dentroDoPeriodo = (dataBR) => {
     if (!periodoInicio && !periodoFim) return true;
-    const [dia, mes, ano] = vencimentoBR.split('/');
+    const [dia, mes, ano] = dataBR.split('/');
     const iso = `${ano}-${mes}-${dia}`;
     if (periodoInicio && iso < periodoInicio) return false;
     if (periodoFim && iso > periodoFim) return false;
     return true;
   };
 
-  const filtradas = contasAPagar.filter(c => c.status === 'Pago' && dentroDoPeriodo(c.vencimento));
+  // Filtra pela data em que a despesa foi de fato PAGA (quando saiu do banco
+  // de verdade), não pelo vencimento — o vencimento quase sempre cai num mês
+  // diferente do pagamento, então filtrar por ele fazia o gráfico não trazer
+  // nada quando ela filtrava pelo período em que realmente pagou as contas.
+  const filtradas = contasAPagar.filter(c => c.status === 'Pago' && dentroDoPeriodo(c.dataPagamento || c.vencimento));
   const porCategoria = {};
   filtradas.forEach(c => {
     const cat = c.categoria || 'Sem classificação';
@@ -146,57 +170,48 @@ function GraficoBarrasDespesas({ contasAPagar }) {
   );
 }
 
-// Divergente: comissão líquida pode ficar negativa (ex: MEI descontado sem faturamento
-// no ciclo), então a barra precisa crescer pra baixo nesse caso — nunca pra cima como
-// se fosse um valor positivo pequeno.
-function GraficoComissaoPorBarbeiro({ comissoes, barbeiros }) {
-  const dados = barbeiros.map(b => {
-    const c = comissoes[b.chave];
-    const liquida = (c.servicos + c.produtos + c.assinatura) - (c.vale + c.consumo + c.mei);
-    return { nome: b.nome.split(' ')[0], liquida };
-  });
-  const maxAbs = Math.max(1, ...dados.map(d => Math.abs(d.liquida)));
-  const REGIAO_PX = 90;
-
-  return (
-    <div className="colunas-divergentes">
-      {dados.map(d => {
-        const positivo = d.liquida >= 0;
-        const alturaBarra = Math.max(2, (Math.abs(d.liquida) / maxAbs) * REGIAO_PX);
-        return (
-          <div key={d.nome} className="coluna-divergente-item" title={`${d.nome}: ${formatarMoeda(d.liquida)}`}>
-            <span className="valor-coluna-topo">{positivo ? formatarMoedaCompacta(d.liquida) : ''}</span>
-            <div className="regiao-positiva" style={{ height: REGIAO_PX }}>
-              {positivo && <div className="barra-divergente" style={{ height: alturaBarra, background: CORES.azul }}></div>}
-            </div>
-            <div className="linha-base"></div>
-            <div className="regiao-negativa" style={{ height: REGIAO_PX }}>
-              {!positivo && <div className="barra-divergente negativa" style={{ height: alturaBarra, background: '#c0392b' }}></div>}
-            </div>
-            <span className="valor-coluna-baixo">{!positivo ? formatarMoedaCompacta(d.liquida) : ''}</span>
-            <span className="rotulo-coluna">{d.nome}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ResumoContabilidade({ comissoes, barbeiros, onFecharMes }) {
+function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onFecharMes }) {
   const [copiado, setCopiado] = useState(false);
 
-  const somar = (campo) => barbeiros.reduce((soma, b) => soma + (comissoes[b.chave][campo] || 0), 0);
-  const totalServicos = somar('servicos');
-  const totalProdutos = somar('produtos');
-  const totalAssinatura = somar('assinatura');
-  const comissaoBruta = totalServicos + totalProdutos + totalAssinatura;
-  const totalVale = somar('vale');
-  const totalConsumo = somar('consumo');
-  const totalMei = somar('mei');
-  const comissaoLiquida = comissaoBruta - totalVale - totalConsumo - totalMei;
-
   const hoje = new Date();
-  const mesAtual = `${NOMES_MESES[hoje.getMonth()]}/${hoje.getFullYear()}`;
+  const mesAtualISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+  const [mesFechamento, setMesFechamento] = useState(mesAtualISO);
+
+  const faturamentoProdutosSalvo = faturamentoManual.find(f => f.mes === mesFechamento)?.faturamentoProdutos ?? 0;
+  const [produtoInput, setProdutoInput] = useState(String(faturamentoProdutosSalvo || ''));
+  useEffect(() => {
+    setProdutoInput(String(faturamentoProdutosSalvo || ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesFechamento]);
+
+  const mesLabel = (() => {
+    const [ano, mesNum] = mesFechamento.split('-');
+    return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
+  })();
+
+  // Faturamento Total/Outras Entradas vêm das movimentações de verdade
+  // (lançadas manualmente ou via Conciliação), não de números digitados à
+  // parte — é o valor que realmente foi lançado como Receita no sistema.
+  const movimentacoesDoMes = movimentacoes.filter((m) => (
+    tipoVisualMovimentacao(m) === 'entrada' && dataMovParaISO(m.data).slice(0, 7) === mesFechamento
+  ));
+  const somarPorCategoria = (filtro) => movimentacoesDoMes
+    .filter((m) => filtro(separarCategoria(m.categoria)))
+    .reduce((soma, m) => soma + m.valor, 0);
+  // "Produtos e Serviços" é a classificação real que o app usa por padrão pra
+  // toda comanda lançada via Conciliação (CATEGORIA_PADRAO_RECEBIMENTO) — o
+  // Cash Barber não separa produto de serviço na comanda, por isso o
+  // faturamento sai junto aqui e ela divide manualmente abaixo.
+  const faturamentoTotal = somarPorCategoria(({ nivel1, nivel2 }) => nivel1 === 'Receitas' && nivel2 === 'Produtos e Serviços');
+  const outrasEntradas = somarPorCategoria(({ nivel1, nivel2 }) => nivel1 === 'Receitas' && nivel2 !== 'Produtos e Serviços');
+  const faturamentoProdutos = parseFloat(produtoInput) || 0;
+  const faturamentoServicos = faturamentoTotal - faturamentoProdutos;
+
+  const salvarProduto = () => onSalvarFaturamentoProdutos(mesFechamento, parseFloat(produtoInput) || 0);
+
+  const somar = (campo) => barbeiros.reduce((soma, b) => soma + (comissoes[b.chave][campo] || 0), 0);
+  const comissaoBruta = somar('servicos') + somar('produtos') + somar('assinatura');
+  const comissaoLiquida = comissaoBruta - somar('vale') - somar('consumo') - somar('mei');
 
   const linhasBarbeiros = barbeiros.map(b => {
     const c = comissoes[b.chave];
@@ -206,14 +221,15 @@ function ResumoContabilidade({ comissoes, barbeiros, onFecharMes }) {
   }).join('\n');
 
   const texto = `RESUMO FINANCEIRO — Santo Barbearia
-Período: ${mesAtual}
+Período: ${mesLabel}
 
-Faturamento de Serviços: ${formatarMoeda(totalServicos)}
-Faturamento de Produtos: ${formatarMoeda(totalProdutos)}
-Faturamento de Assinaturas: ${formatarMoeda(totalAssinatura)}
+Faturamento Total (Produtos + Serviços): ${formatarMoeda(faturamentoTotal)}
+  Faturamento de Produtos: ${formatarMoeda(faturamentoProdutos)}
+  Faturamento de Serviços: ${formatarMoeda(faturamentoServicos)}
+Outras Entradas: ${formatarMoeda(outrasEntradas)}
 
-Comissão Bruta dos Barbeiros (sem descontos de vale, consumo ou MEI): ${formatarMoeda(comissaoBruta)}
-Comissão Líquida dos Barbeiros (com descontos): ${formatarMoeda(comissaoLiquida)}
+Comissão Bruta dos Barbeiros (ciclo atual, sem descontos de vale, consumo ou MEI): ${formatarMoeda(comissaoBruta)}
+Comissão Líquida dos Barbeiros (ciclo atual, com descontos): ${formatarMoeda(comissaoLiquida)}
 
 Detalhamento por barbeiro:
 ${linhasBarbeiros}`;
@@ -231,6 +247,37 @@ ${linhasBarbeiros}`;
   return (
     <div className="card">
       <h3>Resumo para Contabilidade</h3>
+      <div className="form-transferencia" style={{ marginBottom: 15 }}>
+        <div className="input-group">
+          <label>Mês a ser fechado</label>
+          <input type="month" value={mesFechamento} onChange={(e) => setMesFechamento(e.target.value)} />
+        </div>
+      </div>
+
+      <p className="venc" style={{ marginBottom: 10 }}>Período: {mesLabel}</p>
+      <div className="resumo-grid" style={{ marginBottom: 15 }}>
+        <div className="resumo-item">
+          <p>Faturamento Total</p>
+          <p className="valor-resumo">{formatarMoeda(faturamentoTotal)}</p>
+        </div>
+        <div className="resumo-item">
+          <p>Outras Entradas</p>
+          <p className="valor-resumo">{formatarMoeda(outrasEntradas)}</p>
+        </div>
+      </div>
+
+      <div className="form-transferencia" style={{ marginBottom: 15 }}>
+        <div className="input-group">
+          <label>Faturamento de Produtos ({mesLabel})</label>
+          <input type="number" value={produtoInput} onChange={(e) => setProdutoInput(e.target.value)} placeholder="0,00" />
+        </div>
+        <button onClick={salvarProduto} className="btn-editar">Salvar</button>
+        <div className="input-group">
+          <label>Faturamento de Serviços (calculado)</label>
+          <input type="text" value={formatarMoeda(faturamentoServicos)} disabled />
+        </div>
+      </div>
+
       <pre className="resumo-texto">{texto}</pre>
       <div className="acoes" style={{ marginTop: 10 }}>
         <button onClick={copiar} className="btn-transferir">{copiado ? '✓ Copiado!' : 'Copiar Resumo'}</button>
@@ -284,10 +331,17 @@ function Observacoes({ notas, onAdicionarNota, onExcluirNota }) {
   );
 }
 
-export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, onFecharMes, onAdicionarNota, onExcluirNota }) {
+export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onFecharMes, onAdicionarNota, onExcluirNota }) {
   return (
     <div>
-      <ResumoContabilidade comissoes={comissoes} barbeiros={barbeiros} onFecharMes={onFecharMes} />
+      <ResumoContabilidade
+        comissoes={comissoes}
+        barbeiros={barbeiros}
+        movimentacoes={movimentacoes}
+        faturamentoManual={faturamentoManual}
+        onSalvarFaturamentoProdutos={onSalvarFaturamentoProdutos}
+        onFecharMes={onFecharMes}
+      />
 
       <div className="card">
         <h3>Faturamento Mensal (evolução)</h3>
@@ -297,11 +351,6 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
       <div className="card">
         <h3>Despesas por Classificação Contábil</h3>
         <GraficoBarrasDespesas contasAPagar={contasAPagar} />
-      </div>
-
-      <div className="card">
-        <h3>Comissão Líquida por Barbeiro (ciclo atual)</h3>
-        <GraficoComissaoPorBarbeiro comissoes={comissoes} barbeiros={barbeiros} />
       </div>
 
       <Observacoes notas={notas} onAdicionarNota={onAdicionarNota} onExcluirNota={onExcluirNota} />
