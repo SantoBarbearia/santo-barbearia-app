@@ -174,6 +174,47 @@ function encontrarColuna(linhaCabecalho, nomeColuna) {
   return (linhaCabecalho || []).findIndex((c) => String(c || '').trim().toLowerCase() === alvo);
 }
 
+// Reduz o nome de uma bandeira ao mesmo "token" nos dois lados — o Sistema
+// (Cash Barber) agrupa bandeiras na forma de pagamento ("Visa e Master",
+// "Elo, Cabal e Amex"), enquanto a maquininha traz uma bandeira específica
+// por venda ("Mastercard") — sem normalizar, "Master" (Sistema) nunca bateria
+// com "Mastercard" (maquininha) em uma comparação de texto exata.
+export function normalizarBandeira(texto) {
+  const t = String(texto || '').toLowerCase();
+  if (/master/.test(t)) return 'master';
+  if (/visa/.test(t)) return 'visa';
+  if (/\belo\b/.test(t)) return 'elo';
+  if (/cabal/.test(t)) return 'cabal';
+  if (/amex|american\s*express/.test(t)) return 'amex';
+  if (/hipercard/.test(t)) return 'hipercard';
+  if (/diners/.test(t)) return 'diners';
+  return t.trim();
+}
+
+// A coluna "Forma de pagamento" do Cash Barber junta tipo + um GRUPO de
+// bandeiras na mesma célula (ex: "Crédito À VISTA Visa e Master", "Débito
+// Visa e Master", "Crédito À VISTA Elo, Cabal e Amex") — não dá pra saber a
+// bandeira exata ali, só o grupo. Devolve o tipo (Débito/Crédito) e a lista
+// de bandeiras mencionadas, pra comparar depois se a bandeira específica da
+// maquininha está DENTRO desse grupo.
+export function interpretarFormaPagamentoCartao(formaPagamento) {
+  const texto = String(formaPagamento || '');
+  let tipoCartao = null;
+  if (/d[ée]bito/i.test(texto)) tipoCartao = 'Débito';
+  else if (/cr[ée]dito/i.test(texto)) tipoCartao = 'Crédito';
+
+  const bandeirasCartao = [];
+  if (/visa/i.test(texto)) bandeirasCartao.push('visa');
+  if (/master/i.test(texto)) bandeirasCartao.push('master');
+  if (/\belo\b/i.test(texto)) bandeirasCartao.push('elo');
+  if (/cabal/i.test(texto)) bandeirasCartao.push('cabal');
+  if (/amex/i.test(texto)) bandeirasCartao.push('amex');
+  if (/hipercard/i.test(texto)) bandeirasCartao.push('hipercard');
+  if (/diners/i.test(texto)) bandeirasCartao.push('diners');
+
+  return { tipoCartao, bandeirasCartao };
+}
+
 // Reconhece formatos conhecidos (Sicredi maquininha, balanço do sistema) pra pular o
 // mapeamento manual de colunas e já aplicar o tratamento certo pra cada um.
 export function detectarFormatoConhecido(linhas) {
@@ -378,6 +419,8 @@ export function parseSicrediPagamentosComoVendas(linhas) {
         descricao: `Venda no cartão - ${r[15]}`,
         valor: Math.round(valorBruto * 100) / 100,
         codigoAutorizacao: codigoAutorizacao || null,
+        bandeira: r[15],
+        tipoTransacao: String(r[14] || '').trim() || null,
         tipo: 'entrada',
         encontradoEmPagamentos: true,
         dataPagamento: paraDataISO(r[0]),
@@ -455,6 +498,7 @@ export function parseBalancoSistema(linhas) {
     // Vendas passa a preferir o horário mais próximo, não só o mesmo dia).
     const horaMatch = descricao.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
     const dataHora = horaMatch ? `${paraDataISO(horaMatch[1])}T${horaMatch[2]}:00` : null;
+    const { tipoCartao, bandeirasCartao } = interpretarFormaPagamentoCartao(formaPagamento);
 
     registros.push({
       id: novoId('sis'),
@@ -468,7 +512,9 @@ export function parseBalancoSistema(linhas) {
       tipo: 'entrada',
       viaPix,
       viaCartao,
-      viaDinheiro
+      viaDinheiro,
+      tipoCartao,
+      bandeirasCartao
     });
   }
 
@@ -508,6 +554,7 @@ export function parseMovimentacoesSistema(linhas) {
     if (!dataHoraMatch) continue;
     const data = paraDataISO(dataHoraMatch[1]);
     if (!data) continue;
+    const { tipoCartao, bandeirasCartao } = interpretarFormaPagamentoCartao(formaPagamento);
 
     registros.push({
       id: novoId('sis'),
@@ -521,7 +568,9 @@ export function parseMovimentacoesSistema(linhas) {
       tipo: 'entrada',
       viaPix,
       viaCartao,
-      viaDinheiro
+      viaDinheiro,
+      tipoCartao,
+      bandeirasCartao
     });
   }
 
@@ -536,6 +585,7 @@ export function parseSicrediVendas(linhas) {
   const idxCabecalho = encontrarLinhaCabecalho(linhas, 'Data da venda');
   if (idxCabecalho === -1) return [];
   const colCodigo = encontrarColuna(linhas[idxCabecalho], 'Código de autorização');
+  const colTipoTransacao = encontrarColuna(linhas[idxCabecalho], 'Tipo transação');
   const dados = linhas.slice(idxCabecalho + 1).filter((r) => r[0]);
 
   const vistos = new Map();
@@ -561,6 +611,8 @@ export function parseSicrediVendas(linhas) {
       descricao: `Venda no cartão - ${bandeira}`,
       valor: Math.round(valorBruto * 100) / 100,
       codigoAutorizacao: colCodigo !== -1 ? String(r[colCodigo] || '').trim() || null : null,
+      bandeira,
+      tipoTransacao: colTipoTransacao !== -1 ? String(r[colTipoTransacao] || '').trim() || null : null,
       tipo: 'entrada'
     });
   });

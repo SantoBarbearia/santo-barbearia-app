@@ -69,8 +69,14 @@ function similaridadeNomes(nomeA, nomeB) {
 // não pagou — e um casamento automático "às cegas" deixaria a pessoa errada
 // parecendo inadimplente (ou parecendo paga sem ter pago).
 // Retorna os pares batidos e o que sobrou sem correspondência de cada lado.
+// opcoes.compativel(a, b) é um filtro extra além de valor+data — usado pra
+// exigir, no casamento de cartão, que tipo (Débito/Crédito) e bandeira
+// também batam, não só valor e horário próximo (duas vendas de mesmo valor
+// no mesmo horário mas de bandeiras/tipos diferentes não deviam casar entre
+// si). Quando um dos lados não tem essa informação, o filtro deixa passar
+// (não bloqueia por falta de dado).
 export function conciliar(listaA, listaB, toleranciaDias = 3, opcoes = {}) {
-  const { exigirNome = false } = opcoes;
+  const { exigirNome = false, compativel = null } = opcoes;
   const usadosB = new Set();
   const pares = [];
   const semParA = [];
@@ -83,6 +89,7 @@ export function conciliar(listaA, listaB, toleranciaDias = 3, opcoes = {}) {
       if (Math.abs(a.valor - b.valor) > 0.01) return;
       const dias = diasEntre(a.data, b.data);
       if (dias > toleranciaDias) return;
+      if (compativel && !compativel(a, b)) return;
       const similaridade = similaridadeNomes(nomeA, extrairNomeDaDescricao(b.descricao));
       const minutos = minutosEntre(a, b);
       if (!melhor ||
