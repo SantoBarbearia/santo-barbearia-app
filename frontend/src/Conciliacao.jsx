@@ -973,9 +973,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
 
   const renderUpload = (chave) => {
     const fonte = fontes[chave];
+    const temConteudo = fonte.linhas.length > 0;
+    const chaveSecao = `fonte-${chave}`;
+    const aberta = !secoesRecolhidas.has(chaveSecao);
     return (
       <div className="card" key={chave}>
-        <h3>{LABELS_FONTE[chave]}</h3>
+        {temConteudo ? renderTituloSecao(LABELS_FONTE[chave], chaveSecao) : <h3>{LABELS_FONTE[chave]}</h3>}
 
         {fonte.linhas.length === 0 && !fonte.carregando && mapeando !== chave && (
           <div className="upload-box">
@@ -1047,7 +1050,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           </div>
         )}
 
-        {fonte.linhas.length > 0 && (
+        {temConteudo && aberta && (
           <div>
             {fonte.nota && <p className="nota-formato">✓ {fonte.nota}</p>}
             <p className="upload-dica">{fonte.arquivo} — {fonte.linhas.length} lançamento(s). Revise e corrija antes de conciliar:</p>
