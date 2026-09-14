@@ -106,6 +106,21 @@ CREATE TABLE IF NOT EXISTS categorias_contabeis (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Dados da Empresa (logo + dados que aparecem no cabeçalho do
+-- sistema e nos relatórios exportados)
+CREATE TABLE IF NOT EXISTS dados_empresa (
+  id BIGINT PRIMARY KEY DEFAULT 1,
+  razao_social VARCHAR(255) DEFAULT '',
+  cnpj VARCHAR(30) DEFAULT '',
+  endereco VARCHAR(255) DEFAULT '',
+  responsavel_adm VARCHAR(255) DEFAULT '',
+  telefone_comercial VARCHAR(30) DEFAULT '',
+  telefone_responsavel VARCHAR(30) DEFAULT '',
+  logo TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
 -- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
 -- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
@@ -118,6 +133,7 @@ ALTER TABLE movimentacoes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fechamentos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notas_dashboard ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categorias_contabeis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dados_empresa ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
@@ -126,6 +142,7 @@ CREATE POLICY "Acesso total" ON movimentacoes FOR ALL USING (true) WITH CHECK (t
 CREATE POLICY "Acesso total" ON fechamentos FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON notas_dashboard FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON categorias_contabeis FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON dados_empresa FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
 INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 
@@ -133,6 +150,10 @@ VALUES (1, 0, 0, 0, 0)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO comissoes (id)
+VALUES (1)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO dados_empresa (id)
 VALUES (1)
 ON CONFLICT (id) DO NOTHING;
 
