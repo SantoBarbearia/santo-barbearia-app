@@ -378,15 +378,19 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // confirmar um Pix automaticamente — sem esse sinal, fica pendente pra
     // confirmação manual (evita casar a pessoa errada só por valor+data).
     const passo1 = conciliar(entradasExtrato, sistemaPix, 3, { exigirNome: true });
-    // Uma entrada do extrato que já é claramente um Pix (a Sicredi sempre
-    // escreve "PIX" na descrição) nunca deve tentar casar com a maquininha —
-    // sem essa separação, um Pix sem comanda no Sistema podia coincidir em
-    // valor+data com um depósito de cartão e "sumir" (contado como já
-    // conciliado com a maquininha) sem nunca ter sido lançado de verdade.
-    const semParAPix = passo1.semParA.filter((l) => /pix/i.test(l.descricao));
-    const semParANaoPix = passo1.semParA.filter((l) => !/pix/i.test(l.descricao));
-    const passo2 = conciliar(semParANaoPix, maquininha);
-    const passo2b = conciliar([...passo2.semParA, ...semParAPix], lancamentosManuaisEntrada);
+    // Só tenta casar com a maquininha (passo2) uma entrada que REALMENTE
+    // parece um depósito dela — a Sicredi sempre escreve esses depósitos como
+    // "SICREDI DÉBITO/CRÉDITO/ANTEC(IPAÇÃO) <bandeira>...". Tentar casar
+    // QUALQUER entrada (inclusive um Pix, com ou sem a palavra "PIX" na
+    // descrição — o arquivo do banco não escreve "PIX" em todo Pix) contra a
+    // maquininha é arriscado: se o valor coincidir por acaso com um depósito
+    // de cartão dentro da tolerância de dias, ela era "engolida" como se
+    // fosse conciliação de maquininha e sumia sem nunca virar movimentação.
+    const pareceDepositoMaquininha = (descricao) => /^sicredi\s+(d[ée]bito|cr[ée]dito|antecipa[cç][aã]o|antec)\b/i.test(String(descricao || '').trim());
+    const semParAMaquininha = passo1.semParA.filter((l) => pareceDepositoMaquininha(l.descricao));
+    const semParAOutros = passo1.semParA.filter((l) => !pareceDepositoMaquininha(l.descricao));
+    const passo2 = conciliar(semParAMaquininha, maquininha);
+    const passo2b = conciliar([...passo2.semParA, ...semParAOutros], lancamentosManuaisEntrada);
     const passo3 = conciliar(saidasExtrato, pagamentosApp);
     const passo3b = conciliar(passo3.semParA, lancamentosManuaisSaida);
     const passo4 = conciliar(vendas, sistemaCartao);
