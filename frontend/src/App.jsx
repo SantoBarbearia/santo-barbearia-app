@@ -1501,7 +1501,7 @@ export default function App() {
   };
 
   const handleTransferencia = () => {
-    if (transferencia.valor <= 0 || transferencia.de === transferencia.para) return;
+    if (transferencia.valor <= 0 || transferencia.de === transferencia.para || !transferencia.data) return;
 
     const novasContas = {
       ...contas,
@@ -2239,9 +2239,21 @@ export default function App() {
                     onChange={(e) => setTransferencia({ ...transferencia, valor: e.target.value })}
                   />
                 </div>
+                <div className="input-group">
+                  <label>Data</label>
+                  <input
+                    type="date"
+                    value={transferencia.data}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v && !anoValido(v)) return;
+                      setTransferencia({ ...transferencia, data: v });
+                    }}
+                  />
+                </div>
                 <button
                   onClick={handleTransferencia}
-                  disabled={transferencia.valor <= 0 || transferencia.de === transferencia.para}
+                  disabled={transferencia.valor <= 0 || transferencia.de === transferencia.para || !transferencia.data}
                   className="btn-transferir"
                 >
                   Transferir
