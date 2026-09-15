@@ -742,11 +742,20 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const linhas = (resultado.faturamentoBrutoSistema || []).filter((l) => selecionadosFaturamento.has(l.id) && !ignorados.has(l.id));
     if (linhas.length < 2) return;
     const somaBruto = Math.round(linhas.reduce((s, l) => s + l.valorBruto, 0) * 100) / 100;
-    const candidato = (fontes.extrato.linhas || []).find((e) => e.tipo === 'entrada' && Math.abs(e.valor - somaBruto) < 0.01);
+    // Pix cai como uma entrada própria no extrato — bate aí. Cartão não: o
+    // banco só mostra o depósito do dia inteiro agrupado, então procuramos a
+    // soma entre as vendas da maquininha que ainda não bateram com nenhuma
+    // comanda (passo4.semParA, guardado em vendasCartao.semCorrespondenciaVendas)
+    // — é exatamente onde cai uma venda paga com duas ou mais comandas juntas.
+    const candidatoExtrato = (fontes.extrato.linhas || []).find((e) => e.tipo === 'entrada' && Math.abs(e.valor - somaBruto) < 0.01);
+    const candidatoVenda = !candidatoExtrato
+      ? (resultado.vendasCartao?.semCorrespondenciaVendas || []).find((v) => Math.abs(v.valor - somaBruto) < 0.01)
+      : null;
+    const candidato = candidatoExtrato || candidatoVenda;
 
     const confirmar = candidato
       ? true
-      : window.confirm(`Não achei no extrato nenhuma entrada de ${formatarMoeda(somaBruto)} (a soma das ${linhas.length} comandas selecionadas). Confirmar esse agrupamento mesmo assim, porque você já verificou manualmente?`);
+      : window.confirm(`Não achei no extrato nem nas vendas da maquininha nenhuma entrada de ${formatarMoeda(somaBruto)} (a soma das ${linhas.length} comandas selecionadas). Confirmar esse agrupamento mesmo assim, porque você já verificou manualmente?`);
 
     if (!confirmar) return;
 
@@ -757,8 +766,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       )
     }));
     setSelecionadosFaturamento(new Set());
-    if (candidato) {
-      alert(`Confirmado! A soma de ${formatarMoeda(somaBruto)} bate com o lançamento de ${formatarDataBR(candidato.data)} no extrato.`);
+    if (candidatoExtrato) {
+      alert(`Confirmado! A soma de ${formatarMoeda(somaBruto)} bate com o lançamento de ${formatarDataBR(candidatoExtrato.data)} no extrato.`);
+    } else if (candidatoVenda) {
+      alert(`Confirmado! A soma de ${formatarMoeda(somaBruto)} bate com a venda no cartão de ${formatarDataBR(candidatoVenda.data)} na maquininha.`);
     }
   };
 
@@ -1245,7 +1256,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           )}
         </div>
         <p className="nota-formato">
-          Quando um cliente faz um pagamento só (ex: um Pix) que no Cash Barber virou dois ou mais lançamentos (ex: assinatura + comanda), marque a caixinha das comandas envolvidas — a gente soma e confirma o grupo contra o extrato.
+          Quando um cliente faz um pagamento só (Pix ou no cartão) que no Cash Barber virou dois ou mais lançamentos (ex: assinatura + comanda), marque a caixinha das comandas envolvidas — a gente soma e confirma o grupo contra o extrato (Pix) ou contra as vendas da maquininha (cartão).
         </p>
         {(() => {
           const selecionadasVisiveis = visiveis.filter((l) => selecionadosFaturamento.has(l.id));
