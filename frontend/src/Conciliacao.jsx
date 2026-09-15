@@ -952,7 +952,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                       <span style={{ color: '#c0862e' }}> — já confirmada com outro lançamento do extrato; selecionar aqui libera ele de novo</span>
                     )}
                   </p>
-                  <p className="venc">{formatarDataBR(c.data)}</p>
+                  <p className="venc">{formatarDataBR(c.data)}{c.dataHora ? ` ${c.dataHora.slice(11, 16)}` : ''}</p>
                 </div>
                 <p className="valor-conta">{formatarMoeda(c.valorBruto ?? c.valor)}</p>
               </div>
@@ -1134,7 +1134,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           <div key={l.id} className={`item-conta divergencia-item ${l.tipo === 'saida' ? 'divergencia-saida' : 'divergencia-entrada'}`}>
             <div className="info-conta">
               <p className="desc">{l.descricao} <span className="origem-tag">({origemLabel})</span></p>
-              <p className="venc">{formatarDataBR(l.data)}</p>
+              <p className="venc">{formatarDataBR(l.data)}{l.dataHora ? ` ${l.dataHora.slice(11, 16)}` : ''}</p>
             </div>
             <p className="valor-conta">{formatarMoeda(l.valor)}</p>
             <div className="acoes">
@@ -1533,7 +1533,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                       <div className="info-conta">
                         <p className="desc">{v.descricao}</p>
                         <p className="venc">
-                          {formatarDataBR(v.data)}
+                          {formatarDataBR(v.data)}{v.dataHora ? ` ${v.dataHora.slice(11, 16)}` : ''}
                           {!v.codigoAutorizacao && ' — esse relatório de Vendas não trouxe Código de Autorização, não dá pra ligar automaticamente'}
                         </p>
                       </div>
