@@ -45,16 +45,14 @@ function formatarMesLabel(mesISO) {
   return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
 }
 
-function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes }) {
-  const [hover, setHover] = useState(null);
-  const [periodoInicio, setPeriodoInicio] = useState('');
-  const [periodoFim, setPeriodoFim] = useState('');
-  const [modoVisualizacao, setModoVisualizacao] = useState('separado');
-
-  // Não depende mais de "fechar" mês nenhum — cada mês com movimentação de
-  // Receitas > Produtos e Serviços entra aqui direto, puxando o dado como
-  // ele está agora (inclusive o mês corrente, ainda em andamento). O
-  // Faturamento de Produtos de cada mês vem do mesmo campo do Resumo acima.
+// Não depende mais de "fechar" mês nenhum — cada mês com movimentação de
+// Receitas > Produtos e Serviços entra aqui direto, puxando o dado como ele
+// está agora (inclusive o mês corrente, ainda em andamento). O Faturamento
+// de Produtos de cada mês vem do mesmo campo do Resumo. Usado tanto pelo
+// gráfico de evolução quanto pela projeção — os dois precisam do mesmo
+// "faturamento real por mês", já com os 3 níveis de fallback (movimentação
+// > lançamento manual > fechamento antigo).
+function montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoes) {
   const produtosPorMes = {};
   faturamentoManual.forEach((f) => { produtosPorMes[f.mes] = f.faturamentoProdutos || 0; });
 
@@ -94,8 +92,17 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
   const mesesJaCobertos = new Set([...mesesDasMovimentacoes, ...fechamentosDoHistoricoManual.map(f => f.mes)]);
   const fechamentosAntigos = fechamentos.filter(f => !mesesJaCobertos.has(f.mes));
 
-  const todosOsFechamentos = [...fechamentosPorMovimentacao, ...fechamentosDoHistoricoManual, ...fechamentosAntigos]
+  return [...fechamentosPorMovimentacao, ...fechamentosDoHistoricoManual, ...fechamentosAntigos]
     .map(f => ({ ...f, faturamentoTotal: (f.faturamentoServicos || 0) + (f.faturamentoProdutos || 0) }));
+}
+
+function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes }) {
+  const [hover, setHover] = useState(null);
+  const [periodoInicio, setPeriodoInicio] = useState('');
+  const [periodoFim, setPeriodoFim] = useState('');
+  const [modoVisualizacao, setModoVisualizacao] = useState('separado');
+
+  const todosOsFechamentos = montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoes);
 
   if (todosOsFechamentos.length === 0) {
     return <p>Assim que tiver uma Receita de Produtos e Serviços lançada (pela Conciliação ou manualmente) ou o Faturamento Total de um mês antigo, a evolução aparece aqui.</p>;
@@ -424,6 +431,89 @@ ${linhasBarbeiros}`;
   );
 }
 
+function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, projecaoParametros, onSalvarProjecaoParametros }) {
+  const [dataAumento, setDataAumento] = useState(projecaoParametros.dataAumento || '');
+  const [percentualAumento, setPercentualAumento] = useState(String(projecaoParametros.percentualAumento || ''));
+
+  useEffect(() => {
+    setDataAumento(projecaoParametros.dataAumento || '');
+    setPercentualAumento(String(projecaoParametros.percentualAumento || ''));
+  }, [projecaoParametros.dataAumento, projecaoParametros.percentualAumento]);
+
+  const salvar = () => onSalvarProjecaoParametros({ dataAumento, percentualAumento: parseFloat(percentualAumento) || 0 });
+
+  const historico = montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoes);
+  const porMes = {};
+  historico.forEach(f => { porMes[f.mes] = f; });
+
+  const anoAtual = new Date().getFullYear();
+  const percentual = parseFloat(percentualAumento) || 0;
+
+  const linhas = [];
+  for (let mes = 1; mes <= 12; mes++) {
+    const mesISO = `${anoAtual}-${String(mes).padStart(2, '0')}`;
+    const mesAnteriorISO = `${anoAtual - 1}-${String(mes).padStart(2, '0')}`;
+    const real = porMes[mesISO];
+    if (real && real.faturamentoTotal > 0) {
+      linhas.push({ mes: mesISO, valor: real.faturamentoTotal, origem: 'real' });
+      continue;
+    }
+    const base = porMes[mesAnteriorISO];
+    if (!base) {
+      linhas.push({ mes: mesISO, valor: null, origem: 'sem-dado' });
+      continue;
+    }
+    // Se o mês correspondente do ano anterior já era depois da data do
+    // aumento, ele já reflete o preço novo — não aplica o % de novo.
+    const jaReflete = dataAumento && mesAnteriorISO >= dataAumento.slice(0, 7);
+    const valor = jaReflete ? base.faturamentoTotal : base.faturamentoTotal * (1 + percentual / 100);
+    linhas.push({ mes: mesISO, valor, origem: 'projetado' });
+  }
+
+  const totalAno = linhas.reduce((s, l) => s + (l.valor || 0), 0);
+  const rotuloOrigem = { real: 'Real', projetado: 'Projetado', 'sem-dado': 'Sem dado' };
+
+  return (
+    <div className="card">
+      <h3>Projeção de Faturamento ({anoAtual})</h3>
+      <p className="nota-formato">
+        Estima o faturamento dos meses de {anoAtual} que ainda não têm movimentação lançada, usando o mesmo mês de {anoAtual - 1} como base. Quando esse mês do ano anterior for de antes do aumento de preço, aplica o % informado abaixo pra trazer o valor pro preço atual antes de projetar.
+      </p>
+      <div className="form-transferencia" style={{ marginBottom: 15 }}>
+        <div className="input-group">
+          <label>Data do aumento de preço</label>
+          <input type="date" value={dataAumento} onChange={(e) => setDataAumento(e.target.value)} />
+        </div>
+        <div className="input-group">
+          <label>% de aumento em relação ao ano anterior</label>
+          <input type="number" value={percentualAumento} onChange={(e) => setPercentualAumento(e.target.value)} placeholder="0,0" />
+        </div>
+        <button onClick={salvar} className="btn-editar">Salvar</button>
+      </div>
+
+      <table className="tabela-saldo-conta">
+        <thead>
+          <tr><th>Mês</th><th>Faturamento</th><th>Origem</th></tr>
+        </thead>
+        <tbody>
+          {linhas.map(l => (
+            <tr key={l.mes}>
+              <td>{formatarMesLabel(l.mes)}</td>
+              <td>{l.valor != null ? formatarMoeda(l.valor) : '—'}</td>
+              <td>{rotuloOrigem[l.origem]}</td>
+            </tr>
+          ))}
+          <tr>
+            <td><strong>Total do Ano</strong></td>
+            <td><strong>{formatarMoeda(totalAno)}</strong></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Observacoes({ notas, onAdicionarNota, onExcluirNota }) {
   const [texto, setTexto] = useState('');
   const ordenadas = [...notas].sort((a, b) => b.id - a.id);
@@ -468,7 +558,7 @@ function Observacoes({ notas, onAdicionarNota, onExcluirNota }) {
   );
 }
 
-export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, onFecharMes, onAdicionarNota, onExcluirNota }) {
+export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, projecaoParametros, onSalvarProjecaoParametros, onFecharMes, onAdicionarNota, onExcluirNota }) {
   return (
     <div>
       <ResumoContabilidade
@@ -485,6 +575,14 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
         <h3>Faturamento Mensal (evolução)</h3>
         <GraficoLinhaFaturamento fechamentos={fechamentos} faturamentoManual={faturamentoManual} movimentacoes={movimentacoes} />
       </div>
+
+      <ProjecaoFaturamento
+        fechamentos={fechamentos}
+        faturamentoManual={faturamentoManual}
+        movimentacoes={movimentacoes}
+        projecaoParametros={projecaoParametros}
+        onSalvarProjecaoParametros={onSalvarProjecaoParametros}
+      />
 
       <div className="card">
         <h3>Despesas por Classificação Contábil</h3>

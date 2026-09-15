@@ -130,6 +130,15 @@ CREATE TABLE IF NOT EXISTS faturamento_manual (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Parâmetros de Projeção (data e % do aumento de preço, usados
+-- pra calcular a Projeção de Faturamento no Dashboard)
+CREATE TABLE IF NOT EXISTS parametros_projecao (
+  id BIGINT PRIMARY KEY DEFAULT 1,
+  data_aumento DATE,
+  percentual_aumento DECIMAL(6, 2),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
 -- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
 -- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
@@ -144,6 +153,7 @@ ALTER TABLE notas_dashboard ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categorias_contabeis ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dados_empresa ENABLE ROW LEVEL SECURITY;
 ALTER TABLE faturamento_manual ENABLE ROW LEVEL SECURITY;
+ALTER TABLE parametros_projecao ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
@@ -154,6 +164,7 @@ CREATE POLICY "Acesso total" ON notas_dashboard FOR ALL USING (true) WITH CHECK 
 CREATE POLICY "Acesso total" ON categorias_contabeis FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON dados_empresa FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON faturamento_manual FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON parametros_projecao FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
 INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 

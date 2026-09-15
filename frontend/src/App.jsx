@@ -137,6 +137,7 @@ export default function App() {
   const [categorias, setCategorias] = useState([]);
   const [dadosEmpresa, setDadosEmpresa] = useState(DADOS_EMPRESA_VAZIO);
   const [faturamentoManual, setFaturamentoManual] = useState([]);
+  const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0 });
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -169,7 +170,8 @@ export default function App() {
         supabase.from('notas_dashboard').select('*'),
         supabase.from('categorias_contabeis').select('*'),
         supabase.from('dados_empresa').select('*').single(),
-        supabase.from('faturamento_manual').select('*')
+        supabase.from('faturamento_manual').select('*'),
+        supabase.from('parametros_projecao').select('*').single()
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -184,7 +186,8 @@ export default function App() {
         { data: notasData },
         { data: categoriasData },
         { data: dadosEmpresaData },
-        { data: faturamentoManualData }
+        { data: faturamentoManualData },
+        { data: projecaoParametrosData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -211,6 +214,12 @@ export default function App() {
           faturamentoProdutos: parseFloat(l.faturamento_produtos) || 0,
           faturamentoTotalManual: l.faturamento_total !== null && l.faturamento_total !== undefined ? parseFloat(l.faturamento_total) : null
         })));
+      }
+      if (projecaoParametrosData) {
+        setProjecaoParametros({
+          dataAumento: projecaoParametrosData.data_aumento || '',
+          percentualAumento: parseFloat(projecaoParametrosData.percentual_aumento) || 0
+        });
       }
 
     } catch (erro) {
@@ -1241,6 +1250,30 @@ export default function App() {
   const handleSalvarFaturamentoProdutos = (mes, valor) => handleSalvarFaturamentoManual(mes, 'faturamento_produtos', valor);
   const handleSalvarFaturamentoTotalManual = (mes, valor) => handleSalvarFaturamentoManual(mes, 'faturamento_total', valor);
 
+  // Data e % do aumento de preço, usados na Projeção de Faturamento —
+  // mesmo esquema de salvamento dedicado (tabela própria, pode ainda não
+  // existir em quem não rodou a migração).
+  const handleSalvarProjecaoParametros = async (novosParametros) => {
+    setProjecaoParametros(novosParametros);
+    try {
+      const resultado = await supabase.from('parametros_projecao').upsert([{
+        id: 1,
+        data_aumento: novosParametros.dataAumento || null,
+        percentual_aumento: novosParametros.percentualAumento || 0
+      }]);
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao salvar parâmetros da projeção:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar os Parâmetros de Projeção no banco de dados!\n\n' +
+        'O que você acabou de digitar está aparecendo na tela, mas ainda NÃO foi salvo de verdade.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
+        'database/migracao_parametros_projecao.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
+      );
+    }
+  };
+
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
     const nivel1Formatado = capitalizarTexto(nivel1.trim());
@@ -2264,6 +2297,8 @@ export default function App() {
                 faturamentoManual={faturamentoManual}
                 onSalvarFaturamentoProdutos={handleSalvarFaturamentoProdutos}
                 onSalvarFaturamentoTotalManual={handleSalvarFaturamentoTotalManual}
+                projecaoParametros={projecaoParametros}
+                onSalvarProjecaoParametros={handleSalvarProjecaoParametros}
                 onFecharMes={handleFecharMes}
                 onAdicionarNota={handleAdicionarNota}
                 onExcluirNota={handleExcluirNota}
