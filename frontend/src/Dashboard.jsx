@@ -66,19 +66,26 @@ function montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoe
       totalPorMes[mes] = (totalPorMes[mes] || 0) + m.valor;
     });
 
-  const mesesDasMovimentacoes = Object.keys(totalPorMes);
-  const fechamentosPorMovimentacao = mesesDasMovimentacoes.map((mes) => ({
-    mes,
-    mesLabel: formatarMesLabel(mes),
-    faturamentoProdutos: produtosPorMes[mes] || 0,
-    faturamentoServicos: totalPorMes[mes] - (produtosPorMes[mes] || 0)
-  }));
+  // O Faturamento Total digitado manualmente sempre tem prioridade sobre a
+  // movimentação lançada na Visão Geral/Conciliação pro mesmo mês — faz
+  // parte da transição de sistema: se ela digitou o valor à mão, é esse
+  // que vale, mesmo que exista lançamento divergente no mês.
+  const mesesComManualTotal = new Set(
+    faturamentoManual.filter(f => f.faturamentoTotalManual != null).map(f => f.mes)
+  );
 
-  // Meses antigos lançados manualmente no Resumo (sem movimentação nenhuma
-  // no sistema) completam o histórico de antes de usar o app.
-  const mesesComMovimentacao = new Set(mesesDasMovimentacoes);
+  const mesesDasMovimentacoes = Object.keys(totalPorMes);
+  const fechamentosPorMovimentacao = mesesDasMovimentacoes
+    .filter((mes) => !mesesComManualTotal.has(mes))
+    .map((mes) => ({
+      mes,
+      mesLabel: formatarMesLabel(mes),
+      faturamentoProdutos: produtosPorMes[mes] || 0,
+      faturamentoServicos: totalPorMes[mes] - (produtosPorMes[mes] || 0)
+    }));
+
   const fechamentosDoHistoricoManual = faturamentoManual
-    .filter(f => f.faturamentoTotalManual != null && !mesesComMovimentacao.has(f.mes))
+    .filter(f => f.faturamentoTotalManual != null)
     .map(f => ({
       mes: f.mes,
       mesLabel: formatarMesLabel(f.mes),
