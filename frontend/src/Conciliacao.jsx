@@ -59,6 +59,15 @@ function formatarDataBR(iso) {
   return `${dia}/${mes}/${ano}`;
 }
 
+// Ordena qualquer lista de lançamento por data e hora crescentes — usa
+// dataHora quando tem (mais preciso), senão cai pra data. Ajuda a achar uma
+// comanda/venda específica numa lista longa em vez de vir na ordem que o
+// relatório trouxe (geralmente do mais recente pro mais antigo).
+function ordenarPorDataHora(lista) {
+  const chave = (l) => l.dataHora || l.data || '';
+  return [...lista].sort((a, b) => chave(a).localeCompare(chave(b)));
+}
+
 // Descrição de uma venda da maquininha que não tem comanda no Sistema — usada
 // tanto pra lançar (Composição dos Depósitos) quanto pra reconhecer, numa
 // conciliação futura, que aquela venda específica já foi lançada antes (pelo
@@ -1125,7 +1134,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderDivergencias = (titulo, lista, origemLabel, permitirCasarComSistema = false) => {
-    const visiveis = lista.filter((l) => !ignorados.has(l.id));
+    const visiveis = ordenarPorDataHora(lista.filter((l) => !ignorados.has(l.id)));
     if (visiveis.length === 0) return null;
     return (
       <div>
@@ -1160,7 +1169,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             </div>
             {casamentoManual?.lado === 'extrato' && casamentoManual.id === l.id &&
               (() => {
-                const todos = (resultado.faturamentoBrutoSistema || []).filter((c) => !ignorados.has(c.id));
+                const todos = ordenarPorDataHora((resultado.faturamentoBrutoSistema || []).filter((c) => !ignorados.has(c.id)));
                 const visiveis = mostrarJaCasados ? todos : todos.filter((c) => !c.confirmadoNoBanco);
                 const ocultos = todos.length - visiveis.length;
                 return renderPainelCasamentoManual(l.valor, l.descricao, visiveis, ocultos);
@@ -1226,7 +1235,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderFaturamentoBruto = () => {
-    const visiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+    const visiveis = ordenarPorDataHora((resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id)));
     if (visiveis.length === 0) return null;
     const totalBruto = visiveis.reduce((s, l) => s + l.valorBruto, 0);
     const totalTaxa = visiveis.reduce((s, l) => s + (l.taxa || 0), 0);
@@ -1338,8 +1347,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                   : (fontes.extrato.linhas || [])
                       .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
                       .map((e) => ({ ...e, usadoPorSistemaId: (resultado.paresPixExtratoSistema || []).find((p) => p.extratoId === e.id)?.sistemaId || null }));
-                const visiveis = mostrarJaCasados ? todos : todos.filter((e) => !e.usadoPorSistemaId);
-                const ocultos = todos.length - visiveis.length;
+                const todosOrdenados = ordenarPorDataHora(todos);
+                const visiveis = mostrarJaCasados ? todosOrdenados : todosOrdenados.filter((e) => !e.usadoPorSistemaId);
+                const ocultos = todosOrdenados.length - visiveis.length;
                 return renderPainelCasamentoManual(l.valorBruto, l.descricao, visiveis, ocultos);
               })()}
           </div>
@@ -1351,7 +1361,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderRecebimentosDinheiro = () => {
-    const visiveis = (resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id));
+    const visiveis = ordenarPorDataHora((resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id)));
     if (visiveis.length === 0) return null;
     return (
       <div className="card">
@@ -1528,7 +1538,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 {resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).length === 0 ? (
                   <p>✅ Todas as vendas bateram com o relatório de Pagamentos.</p>
                 ) : (
-                  resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).map((v) => (
+                  ordenarPorDataHora(resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id))).map((v) => (
                     <div key={v.id} className="divergencia-item divergencia-entrada">
                       <div className="info-conta">
                         <p className="desc">{v.descricao}</p>
@@ -1684,7 +1694,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                           </tr>
                         </thead>
                         <tbody>
-                          {d.itens.map((item) => (
+                          {[...d.itens].sort((a, b) => (a.dataHoraVenda || a.dataVenda || '').localeCompare(b.dataHoraVenda || b.dataVenda || '')).map((item) => (
                             <tr key={item.id}>
                               <td>
                                 {formatarDataBR(item.dataVenda)}
