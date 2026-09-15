@@ -45,13 +45,27 @@ function formatarMesLabel(mesISO) {
   return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
 }
 
-function GraficoLinhaFaturamento({ fechamentos }) {
+function GraficoLinhaFaturamento({ fechamentos, faturamentoManual }) {
   const [hover, setHover] = useState(null);
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
 
-  if (fechamentos.length === 0) {
-    return <p>Feche o primeiro mês (botão "Fechar Mês" no Resumo acima) pra começar a ver a evolução aqui.</p>;
+  // Meses antigos lançados manualmente no Resumo (sem "Fechar Mês") também
+  // entram aqui, com o mesmo Produtos/Serviços que ela registrou lá — só não
+  // substitui um mês que já tenha um fechamento de verdade pra esse mesmo mês.
+  const mesesComFechamento = new Set(fechamentos.map(f => f.mes));
+  const fechamentosDoHistoricoManual = faturamentoManual
+    .filter(f => f.faturamentoTotalManual != null && !mesesComFechamento.has(f.mes))
+    .map(f => ({
+      mes: f.mes,
+      mesLabel: formatarMesLabel(f.mes),
+      faturamentoProdutos: f.faturamentoProdutos || 0,
+      faturamentoServicos: f.faturamentoTotalManual - (f.faturamentoProdutos || 0)
+    }));
+  const todosOsFechamentos = [...fechamentos, ...fechamentosDoHistoricoManual];
+
+  if (todosOsFechamentos.length === 0) {
+    return <p>Feche o primeiro mês (botão "Fechar Mês" no Resumo acima) ou lance o Faturamento Total de um mês antigo pra começar a ver a evolução aqui.</p>;
   }
 
   const filtroPeriodo = (
@@ -71,7 +85,7 @@ function GraficoLinhaFaturamento({ fechamentos }) {
   );
 
   const dentroDoPeriodo = (mes) => (!periodoInicio || mes >= periodoInicio) && (!periodoFim || mes <= periodoFim);
-  const ordenados = [...fechamentos].filter(f => dentroDoPeriodo(f.mes)).sort((a, b) => a.mes.localeCompare(b.mes));
+  const ordenados = [...todosOsFechamentos].filter(f => dentroDoPeriodo(f.mes)).sort((a, b) => a.mes.localeCompare(b.mes));
 
   if (ordenados.length === 0) {
     return (
@@ -340,13 +354,15 @@ ${linhasBarbeiros}`;
           <p className="venc" style={{ marginBottom: 8 }}>Histórico de Faturamento Total (lançado manualmente)</p>
           <table className="tabela-saldo-conta">
             <thead>
-              <tr><th>Mês</th><th>Faturamento Total</th></tr>
+              <tr><th>Mês</th><th>Faturamento Total</th><th>Faturamento de Produtos</th><th>Faturamento de Serviços</th></tr>
             </thead>
             <tbody>
               {historicoFaturamento.map(f => (
                 <tr key={f.mes}>
                   <td>{formatarMesLabel(f.mes)}</td>
                   <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
+                  <td>{formatarMoeda(f.faturamentoProdutos || 0)}</td>
+                  <td>{formatarMoeda(f.faturamentoTotalManual - (f.faturamentoProdutos || 0))}</td>
                 </tr>
               ))}
             </tbody>
@@ -422,7 +438,7 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
 
       <div className="card">
         <h3>Faturamento Mensal (evolução)</h3>
-        <GraficoLinhaFaturamento fechamentos={fechamentos} />
+        <GraficoLinhaFaturamento fechamentos={fechamentos} faturamentoManual={faturamentoManual} />
       </div>
 
       <div className="card">
