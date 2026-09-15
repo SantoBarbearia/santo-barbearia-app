@@ -49,6 +49,7 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
   const [hover, setHover] = useState(null);
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
+  const [modoVisualizacao, setModoVisualizacao] = useState('separado');
 
   // Não depende mais de "fechar" mês nenhum — cada mês com movimentação de
   // Receitas > Produtos e Serviços entra aqui direto, puxando o dado como
@@ -93,7 +94,8 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
   const mesesJaCobertos = new Set([...mesesDasMovimentacoes, ...fechamentosDoHistoricoManual.map(f => f.mes)]);
   const fechamentosAntigos = fechamentos.filter(f => !mesesJaCobertos.has(f.mes));
 
-  const todosOsFechamentos = [...fechamentosPorMovimentacao, ...fechamentosDoHistoricoManual, ...fechamentosAntigos];
+  const todosOsFechamentos = [...fechamentosPorMovimentacao, ...fechamentosDoHistoricoManual, ...fechamentosAntigos]
+    .map(f => ({ ...f, faturamentoTotal: (f.faturamentoServicos || 0) + (f.faturamentoProdutos || 0) }));
 
   if (todosOsFechamentos.length === 0) {
     return <p>Assim que tiver uma Receita de Produtos e Serviços lançada (pela Conciliação ou manualmente) ou o Faturamento Total de um mês antigo, a evolução aparece aqui.</p>;
@@ -112,6 +114,8 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
       {(periodoInicio || periodoFim) && (
         <button onClick={() => { setPeriodoInicio(''); setPeriodoFim(''); }} className="btn-cancelar">Limpar filtro</button>
       )}
+      <button onClick={() => setModoVisualizacao('separado')} className={modoVisualizacao === 'separado' ? 'btn-transferir' : 'btn-editar'}>Separado (Produtos/Serviços)</button>
+      <button onClick={() => setModoVisualizacao('total')} className={modoVisualizacao === 'total' ? 'btn-transferir' : 'btn-editar'}>Só o Total</button>
     </div>
   );
 
@@ -131,7 +135,11 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
   const areaW = largura - margemEsq - margemDir;
   const areaH = altura - margemTopo - margemBaixo;
 
-  const maxValor = Math.max(1, ...ordenados.flatMap(f => [f.faturamentoServicos, f.faturamentoProdutos]));
+  const series = modoVisualizacao === 'total'
+    ? [{ campo: 'faturamentoTotal', cor: CORES.azul, label: 'Total' }]
+    : [{ campo: 'faturamentoServicos', cor: CORES.azul, label: 'Serviços' }, { campo: 'faturamentoProdutos', cor: CORES.laranja, label: 'Produtos' }];
+
+  const maxValor = Math.max(1, ...ordenados.flatMap(f => series.map(s => f[s.campo])));
   const tetoEscala = Math.ceil(maxValor / 500) * 500 || 500;
 
   const x = (i) => margemEsq + (ordenados.length === 1 ? areaW / 2 : (i / (ordenados.length - 1)) * areaW);
@@ -145,8 +153,9 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
     <div>
       {filtroPeriodo}
       <div className="legenda-grafico">
-        <span><i style={{ background: CORES.azul }}></i> Serviços</span>
-        <span><i style={{ background: CORES.laranja }}></i> Produtos</span>
+        {series.map(s => (
+          <span key={s.campo}><i style={{ background: s.cor }}></i> {s.label}</span>
+        ))}
       </div>
       <svg viewBox={`0 0 ${largura} ${altura}`} width="100%" style={{ maxWidth: largura }}>
         {ticksY.map((t, i) => (
@@ -157,33 +166,32 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
         ))}
         <line x1={margemEsq} x2={largura - margemDir} y1={margemTopo + areaH} y2={margemTopo + areaH} stroke={CORES.eixo} strokeWidth="1" />
 
-        <path d={linha('faturamentoServicos')} fill="none" stroke={CORES.azul} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-        <path d={linha('faturamentoProdutos')} fill="none" stroke={CORES.laranja} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {series.map(s => (
+          <path key={s.campo} d={linha(s.campo)} fill="none" stroke={s.cor} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        ))}
 
         {ordenados.map((f, i) => (
           <g key={i}>
-            <circle
-              cx={x(i)} cy={y(f.faturamentoServicos)} r="4" fill={CORES.azul} stroke="#fff" strokeWidth="2"
-              onMouseEnter={() => setHover({ i, campo: 'faturamentoServicos' })} onMouseLeave={() => setHover(null)}
-            />
-            <circle
-              cx={x(i)} cy={y(f.faturamentoProdutos)} r="4" fill={CORES.laranja} stroke="#fff" strokeWidth="2"
-              onMouseEnter={() => setHover({ i, campo: 'faturamentoProdutos' })} onMouseLeave={() => setHover(null)}
-            />
+            {series.map(s => (
+              <circle
+                key={s.campo}
+                cx={x(i)} cy={y(f[s.campo])} r="4" fill={s.cor} stroke="#fff" strokeWidth="2"
+                onMouseEnter={() => setHover({ i, campo: s.campo })} onMouseLeave={() => setHover(null)}
+              />
+            ))}
             <text x={x(i)} y={altura - 8} fontSize="11" fill={CORES.textoMudo} textAnchor="middle">{f.mesLabel}</text>
           </g>
         ))}
 
-        <text x={x(ordenados.length - 1) + 10} y={y(ultimo.faturamentoServicos) + 4} fontSize="11" fill={CORES.textoPrimario} fontWeight="600">
-          {formatarMoedaCompacta(ultimo.faturamentoServicos)}
-        </text>
-        <text x={x(ordenados.length - 1) + 10} y={y(ultimo.faturamentoProdutos) + 4} fontSize="11" fill={CORES.textoPrimario} fontWeight="600">
-          {formatarMoedaCompacta(ultimo.faturamentoProdutos)}
-        </text>
+        {series.map(s => (
+          <text key={s.campo} x={x(ordenados.length - 1) + 10} y={y(ultimo[s.campo]) + 4} fontSize="11" fill={CORES.textoPrimario} fontWeight="600">
+            {formatarMoedaCompacta(ultimo[s.campo])}
+          </text>
+        ))}
       </svg>
       {hover && (
         <div className="tooltip-grafico">
-          {ordenados[hover.i].mesLabel} — {hover.campo === 'faturamentoServicos' ? 'Serviços' : 'Produtos'}: {formatarMoeda(ordenados[hover.i][hover.campo])}
+          {ordenados[hover.i].mesLabel} — {series.find(s => s.campo === hover.campo)?.label}: {formatarMoeda(ordenados[hover.i][hover.campo])}
         </div>
       )}
     </div>
@@ -385,17 +393,23 @@ ${linhasBarbeiros}`;
           <p className="venc" style={{ marginBottom: 8 }}>Histórico de Faturamento Total (lançado manualmente)</p>
           <table className="tabela-saldo-conta">
             <thead>
-              <tr><th>Mês</th><th>Faturamento Total</th><th>Faturamento de Produtos</th><th>Faturamento de Serviços</th></tr>
+              <tr><th>Mês</th><th>Faturamento Total</th><th>Faturamento de Produtos</th><th>Faturamento de Serviços</th><th>% Produtos sobre Serviços</th></tr>
             </thead>
             <tbody>
-              {historicoFaturamento.map(f => (
-                <tr key={f.mes}>
-                  <td>{formatarMesLabel(f.mes)}</td>
-                  <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
-                  <td>{formatarMoeda(f.faturamentoProdutos || 0)}</td>
-                  <td>{formatarMoeda(f.faturamentoTotalManual - (f.faturamentoProdutos || 0))}</td>
-                </tr>
-              ))}
+              {historicoFaturamento.map(f => {
+                const produtos = f.faturamentoProdutos || 0;
+                const servicos = f.faturamentoTotalManual - produtos;
+                const percentual = servicos > 0 ? `${((produtos / servicos) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : '—';
+                return (
+                  <tr key={f.mes}>
+                    <td>{formatarMesLabel(f.mes)}</td>
+                    <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
+                    <td>{formatarMoeda(produtos)}</td>
+                    <td>{formatarMoeda(servicos)}</td>
+                    <td>{percentual}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
