@@ -487,6 +487,32 @@ function calcularFarol(real, meta) {
   return 'vermelho';
 }
 
+// % de Crescimento não é mais digitado à mão: é calculado a partir do
+// histórico real (mesmo raciocínio da planilha da Fernanda) — compara cada
+// mês com o mesmo mês do ano anterior, soma tudo, e tira daí o % de Aumento
+// de Preço (que já está embutido nesse crescimento histórico) pra sobrar só
+// o crescimento orgânico.
+function calcularCrescimentoHistorico(historico, percentualAumento) {
+  const porMes = {};
+  historico.forEach(f => { porMes[f.mes] = f.faturamentoTotal; });
+
+  let somaAtual = 0;
+  let somaAnterior = 0;
+  historico.forEach(f => {
+    const [ano, mes] = f.mes.split('-').map(Number);
+    const mesAnteriorISO = `${ano - 1}-${String(mes).padStart(2, '0')}`;
+    const anterior = porMes[mesAnteriorISO];
+    if (anterior != null && anterior > 0) {
+      somaAtual += f.faturamentoTotal;
+      somaAnterior += anterior;
+    }
+  });
+
+  if (somaAnterior <= 0) return null;
+  const crescimentoTotalHistorico = (somaAtual / somaAnterior - 1) * 100;
+  return crescimentoTotalHistorico - (parseFloat(percentualAumento) || 0);
+}
+
 const CORES_FAROL = { verde: '#27ae60', amarelo: '#f0ad4e', vermelho: '#c0392b' };
 
 function Farol({ cor, titulo }) {
@@ -497,19 +523,11 @@ function Farol({ cor, titulo }) {
 function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, projecaoParametros, onSalvarProjecaoParametros }) {
   const [dataAumento, setDataAumento] = useState(projecaoParametros.dataAumento || '');
   const [percentualAumento, setPercentualAumento] = useState(String(projecaoParametros.percentualAumento || ''));
-  const [percentualCrescimento, setPercentualCrescimento] = useState(String(projecaoParametros.percentualCrescimento || ''));
 
   useEffect(() => {
     setDataAumento(projecaoParametros.dataAumento || '');
     setPercentualAumento(String(projecaoParametros.percentualAumento || ''));
-    setPercentualCrescimento(String(projecaoParametros.percentualCrescimento || ''));
-  }, [projecaoParametros.dataAumento, projecaoParametros.percentualAumento, projecaoParametros.percentualCrescimento]);
-
-  const salvar = () => onSalvarProjecaoParametros({
-    dataAumento,
-    percentualAumento: parseFloat(percentualAumento) || 0,
-    percentualCrescimento: parseFloat(percentualCrescimento) || 0
-  });
+  }, [projecaoParametros.dataAumento, projecaoParametros.percentualAumento]);
 
   const anoAtual = new Date().getFullYear();
   const [periodoInicio, setPeriodoInicio] = useState(`${anoAtual}-01`);
@@ -519,13 +537,24 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
   const porMes = {};
   historico.forEach(f => { porMes[f.mes] = f; });
 
+  // % de Crescimento não é mais digitado: sai do histórico real (YoY),
+  // descontando o próprio % de Aumento de Preço que já empurrou esse
+  // crescimento pra cima — sobra só o crescimento orgânico.
+  const percentualCrescimento = calcularCrescimentoHistorico(historico, percentualAumento);
+
+  const salvar = () => onSalvarProjecaoParametros({
+    dataAumento,
+    percentualAumento: parseFloat(percentualAumento) || 0,
+    percentualCrescimento: percentualCrescimento || 0
+  });
+
   // Mesma conta da planilha: pega o mesmo mês do ano anterior e aplica os
   // dois percentuais somados (aumento de preço + crescimento), igual em
   // todo mês do período — o aumento de preço normalmente acontece uma vez,
   // no fim do ano anterior, então já vale pro ano inteiro sendo projetado;
   // por isso a data serve só de referência de quando foi, sem entrar na
   // conta mês a mês.
-  const fatorAjuste = 1 + ((parseFloat(percentualAumento) || 0) + (parseFloat(percentualCrescimento) || 0)) / 100;
+  const fatorAjuste = 1 + ((parseFloat(percentualAumento) || 0) + (percentualCrescimento || 0)) / 100;
 
   const linhas = enumerarMeses(periodoInicio, periodoFim).map((mesISO) => {
     const [ano, mes] = mesISO.split('-').map(Number);
@@ -549,7 +578,7 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
     <div className="card">
       <h3>Projeção de Faturamento</h3>
       <p className="nota-formato">
-        Estima o faturamento dos meses do período abaixo que ainda não têm movimentação lançada: pega o mesmo mês do ano anterior e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima. Nos meses que já têm faturamento real, o farol mostra se bateu a meta projetada pra esse mês.
+        Estima o faturamento dos meses do período abaixo que ainda não têm movimentação lançada: pega o mesmo mês do ano anterior e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima. Nos meses que já têm faturamento real, o farol mostra se bateu a meta projetada pra esse mês. O % de Crescimento é calculado sozinho a partir do histórico (comparação ano a ano), descontando o próprio % de Aumento de Preço que já está embutido nesse crescimento.
       </p>
       <div className="form-transferencia" style={{ marginBottom: 15 }}>
         <div className="input-group">
@@ -571,8 +600,12 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
           <input type="number" value={percentualAumento} onChange={(e) => setPercentualAumento(e.target.value)} placeholder="0,0" />
         </div>
         <div className="input-group">
-          <label>% de Crescimento</label>
-          <input type="number" value={percentualCrescimento} onChange={(e) => setPercentualCrescimento(e.target.value)} placeholder="0,0" />
+          <label>% de Crescimento (calculado pelo histórico)</label>
+          <input
+            type="text"
+            value={percentualCrescimento != null ? `${percentualCrescimento.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : 'Sem histórico suficiente'}
+            disabled
+          />
         </div>
         <button onClick={salvar} className="btn-editar">Salvar</button>
       </div>
