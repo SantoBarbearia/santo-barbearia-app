@@ -47,12 +47,41 @@ function formatarMesLabel(mesISO) {
 
 function GraficoLinhaFaturamento({ fechamentos }) {
   const [hover, setHover] = useState(null);
+  const [periodoInicio, setPeriodoInicio] = useState('');
+  const [periodoFim, setPeriodoFim] = useState('');
 
   if (fechamentos.length === 0) {
     return <p>Feche o primeiro mês (botão "Fechar Mês" no Resumo acima) pra começar a ver a evolução aqui.</p>;
   }
 
-  const ordenados = [...fechamentos].sort((a, b) => a.mes.localeCompare(b.mes));
+  const filtroPeriodo = (
+    <div className="form-transferencia" style={{ marginBottom: 15 }}>
+      <div className="input-group">
+        <label>De</label>
+        <input type="month" value={periodoInicio} onChange={(e) => setPeriodoInicio(e.target.value)} />
+      </div>
+      <div className="input-group">
+        <label>Até</label>
+        <input type="month" value={periodoFim} onChange={(e) => setPeriodoFim(e.target.value)} />
+      </div>
+      {(periodoInicio || periodoFim) && (
+        <button onClick={() => { setPeriodoInicio(''); setPeriodoFim(''); }} className="btn-cancelar">Limpar filtro</button>
+      )}
+    </div>
+  );
+
+  const dentroDoPeriodo = (mes) => (!periodoInicio || mes >= periodoInicio) && (!periodoFim || mes <= periodoFim);
+  const ordenados = [...fechamentos].filter(f => dentroDoPeriodo(f.mes)).sort((a, b) => a.mes.localeCompare(b.mes));
+
+  if (ordenados.length === 0) {
+    return (
+      <div>
+        {filtroPeriodo}
+        <p>Nenhum mês fechado nesse período.</p>
+      </div>
+    );
+  }
+
   const largura = 720, altura = 260, margemEsq = 55, margemDir = 65, margemTopo = 20, margemBaixo = 35;
   const areaW = largura - margemEsq - margemDir;
   const areaH = altura - margemTopo - margemBaixo;
@@ -69,6 +98,7 @@ function GraficoLinhaFaturamento({ fechamentos }) {
 
   return (
     <div>
+      {filtroPeriodo}
       <div className="legenda-grafico">
         <span><i style={{ background: CORES.azul }}></i> Serviços</span>
         <span><i style={{ background: CORES.laranja }}></i> Produtos</span>
