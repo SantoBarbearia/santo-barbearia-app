@@ -45,27 +45,58 @@ function formatarMesLabel(mesISO) {
   return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
 }
 
-function GraficoLinhaFaturamento({ fechamentos, faturamentoManual }) {
+function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes }) {
   const [hover, setHover] = useState(null);
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
 
-  // Meses antigos lançados manualmente no Resumo (sem "Fechar Mês") também
-  // entram aqui, com o mesmo Produtos/Serviços que ela registrou lá — só não
-  // substitui um mês que já tenha um fechamento de verdade pra esse mesmo mês.
-  const mesesComFechamento = new Set(fechamentos.map(f => f.mes));
+  // Não depende mais de "fechar" mês nenhum — cada mês com movimentação de
+  // Receitas > Produtos e Serviços entra aqui direto, puxando o dado como
+  // ele está agora (inclusive o mês corrente, ainda em andamento). O
+  // Faturamento de Produtos de cada mês vem do mesmo campo do Resumo acima.
+  const produtosPorMes = {};
+  faturamentoManual.forEach((f) => { produtosPorMes[f.mes] = f.faturamentoProdutos || 0; });
+
+  const totalPorMes = {};
+  movimentacoes
+    .filter((m) => tipoVisualMovimentacao(m) === 'entrada')
+    .forEach((m) => {
+      const { nivel1, nivel2 } = separarCategoria(m.categoria);
+      if (nivel1 !== 'Receitas' || nivel2 !== 'Produtos e Serviços') return;
+      const mes = dataMovParaISO(m.data).slice(0, 7);
+      totalPorMes[mes] = (totalPorMes[mes] || 0) + m.valor;
+    });
+
+  const mesesDasMovimentacoes = Object.keys(totalPorMes);
+  const fechamentosPorMovimentacao = mesesDasMovimentacoes.map((mes) => ({
+    mes,
+    mesLabel: formatarMesLabel(mes),
+    faturamentoProdutos: produtosPorMes[mes] || 0,
+    faturamentoServicos: totalPorMes[mes] - (produtosPorMes[mes] || 0)
+  }));
+
+  // Meses antigos lançados manualmente no Resumo (sem movimentação nenhuma
+  // no sistema) completam o histórico de antes de usar o app.
+  const mesesComMovimentacao = new Set(mesesDasMovimentacoes);
   const fechamentosDoHistoricoManual = faturamentoManual
-    .filter(f => f.faturamentoTotalManual != null && !mesesComFechamento.has(f.mes))
+    .filter(f => f.faturamentoTotalManual != null && !mesesComMovimentacao.has(f.mes))
     .map(f => ({
       mes: f.mes,
       mesLabel: formatarMesLabel(f.mes),
       faturamentoProdutos: f.faturamentoProdutos || 0,
       faturamentoServicos: f.faturamentoTotalManual - (f.faturamentoProdutos || 0)
     }));
-  const todosOsFechamentos = [...fechamentos, ...fechamentosDoHistoricoManual];
+
+  // Fechamentos antigos (de quando existia o botão "Fechar Mês") só entram
+  // pra um mês que não tenha nem movimentação nem lançamento manual — pra
+  // não perder histórico de antes dessa mudança.
+  const mesesJaCobertos = new Set([...mesesDasMovimentacoes, ...fechamentosDoHistoricoManual.map(f => f.mes)]);
+  const fechamentosAntigos = fechamentos.filter(f => !mesesJaCobertos.has(f.mes));
+
+  const todosOsFechamentos = [...fechamentosPorMovimentacao, ...fechamentosDoHistoricoManual, ...fechamentosAntigos];
 
   if (todosOsFechamentos.length === 0) {
-    return <p>Feche o primeiro mês (botão "Fechar Mês" no Resumo acima) ou lance o Faturamento Total de um mês antigo pra começar a ver a evolução aqui.</p>;
+    return <p>Assim que tiver uma Receita de Produtos e Serviços lançada (pela Conciliação ou manualmente) ou o Faturamento Total de um mês antigo, a evolução aparece aqui.</p>;
   }
 
   const filtroPeriodo = (
@@ -91,7 +122,7 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual }) {
     return (
       <div>
         {filtroPeriodo}
-        <p>Nenhum mês fechado nesse período.</p>
+        <p>Nenhum faturamento nesse período.</p>
       </div>
     );
   }
@@ -373,7 +404,7 @@ ${linhasBarbeiros}`;
       <pre className="resumo-texto">{texto}</pre>
       <div className="acoes" style={{ marginTop: 10 }}>
         <button onClick={copiar} className="btn-transferir">{copiado ? '✓ Copiado!' : 'Copiar Resumo'}</button>
-        <button onClick={onFecharMes} className="btn-editar">Fechar Mês (salvar no histórico)</button>
+        <button onClick={onFecharMes} className="btn-editar">Fechar Ciclo de Comissões</button>
       </div>
     </div>
   );
@@ -438,7 +469,7 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
 
       <div className="card">
         <h3>Faturamento Mensal (evolução)</h3>
-        <GraficoLinhaFaturamento fechamentos={fechamentos} faturamentoManual={faturamentoManual} />
+        <GraficoLinhaFaturamento fechamentos={fechamentos} faturamentoManual={faturamentoManual} movimentacoes={movimentacoes} />
       </div>
 
       <div className="card">
