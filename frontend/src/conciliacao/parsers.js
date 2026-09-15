@@ -224,6 +224,7 @@ export function detectarFormatoConhecido(linhas) {
   const segundaCelula = String(linhas[0]?.[1] || '').trim();
   if (primeiraCelula === 'Tipo' && segundaCelula === 'Descrição') return 'balanco-sistema';
   if (primeiraCelula === 'Cliente' && segundaCelula === 'Telefone') return 'sistema-movimentacoes';
+  if (primeiraCelula === 'ID da comanda' && segundaCelula === 'Filial') return 'sistema-transacoes';
 
   // Exportação em XLSX vem com linhas de título ("Relatório de Pagamentos.", período,
   // etc.) antes do cabeçalho; a exportação em CSV às vezes começa direto no cabeçalho.
@@ -571,6 +572,58 @@ export function parseMovimentacoesSistema(linhas) {
       viaDinheiro,
       tipoCartao,
       bandeirasCartao
+    });
+  }
+
+  return registros;
+}
+
+// Relatório de Dados (Transações) do Cash Barber: lista TODAS as transações
+// do período, uma por linha — inclusive Assinaturas, que o Relatório de
+// Movimentações não traz (ele só lista Comandas). Em compensação, esse
+// relatório não vem com a Forma de pagamento de cada uma. Por isso usamos
+// só as linhas de Assinatura daqui: as de Comanda já chegam pelo Relatório
+// de Movimentações, com a forma de pagamento certa — usar as duas pra
+// Comanda só duplicaria sem ganhar nada. Como não sabemos a forma de
+// pagamento da assinatura, ela nunca confirma sozinha contra o extrato ou a
+// maquininha — fica sempre pendente de conferência manual (ver
+// formaPagamentoDesconhecida em Conciliacao.jsx).
+export function parseTransacoesSistema(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'ID da comanda');
+  const inicio = idxCabecalho === -1 ? 0 : idxCabecalho + 1;
+
+  const registros = [];
+  for (let i = inicio; i < linhas.length; i++) {
+    const r = linhas[i];
+    if (String(r[4] || '').trim() !== 'Assinatura') continue;
+
+    const cliente = String(r[3] || '').trim();
+    if (!cliente) continue;
+
+    const valor = parseValorBR(r[6]);
+    if (!(valor > 0)) continue;
+
+    const dataHoraMatch = String(r[7] || '').match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+    if (!dataHoraMatch) continue;
+    const data = paraDataISO(dataHoraMatch[1]);
+    if (!data) continue;
+
+    registros.push({
+      id: novoId('sis'),
+      data,
+      dataHora: `${data}T${dataHoraMatch[2]}:00`,
+      descricao: `Assinatura ${cliente} - ${dataHoraMatch[1]} ${dataHoraMatch[2]}`,
+      valor,
+      valorBruto: valor,
+      valorLiquido: valor,
+      taxa: 0,
+      tipo: 'entrada',
+      viaPix: false,
+      viaCartao: false,
+      viaDinheiro: false,
+      formaPagamentoDesconhecida: true,
+      tipoCartao: null,
+      bandeirasCartao: []
     });
   }
 

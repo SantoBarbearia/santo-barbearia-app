@@ -16,6 +16,7 @@ import {
   ligarVendasComPagamentos,
   parseBalancoSistema,
   parseMovimentacoesSistema,
+  parseTransacoesSistema,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
   calcularTaxasPagamentosPorDia,
@@ -32,12 +33,14 @@ const NOTAS_FORMATO = {
   'sicredi-pagamentos': 'Relatório de Pagamentos da Sicredi reconhecido: os valores foram agrupados por dia/bandeira/tipo, do jeito que chegam no extrato. Esse relatório já traz tudo que o de Vendas traria (e mais a data de pagamento) — não precisa subir o Relatório de Vendas também, a não ser que queira uma conferência extra por Código de Autorização.',
   'sicredi-vendas': 'Relatório de Vendas da Sicredi reconhecido: uma linha por venda (valor bruto, antes do desconto da maquininha), pra conferir com o Sistema.',
   'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.',
-  'sistema-movimentacoes': 'Relatório de Movimentações do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas). Esse relatório não traz a taxa da maquininha por comanda — use "Vendas × Pagamentos da Maquininha" pra conferir a taxa real de cada venda no cartão.'
+  'sistema-movimentacoes': 'Relatório de Movimentações do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas). Esse relatório não traz a taxa da maquininha por comanda — use "Vendas × Pagamentos da Maquininha" pra conferir a taxa real de cada venda no cartão.',
+  'sistema-transacoes': 'Relatório de Dados (Transações) do sistema reconhecido: usamos só as linhas de Assinatura daqui (as de Comanda já vêm pelo Relatório de Movimentações, com a forma de pagamento). Como esse relatório não traz a forma de pagamento, as assinaturas aparecem sempre como pendentes — a confirmação com o extrato/maquininha precisa ser manual.'
 };
 
 const LABELS_FONTE = {
   extrato: 'Extrato Bancário',
   sistema: 'Relatório do Sistema',
+  assinaturas: 'Relatório de Dados/Transações do Sistema (opcional, pra assinaturas)',
   maquininha: 'Relatório de Pagamentos da Maquininha',
   vendas: 'Relatório de Vendas da Maquininha (opcional)'
 };
@@ -104,6 +107,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
+    assinaturas: { ...FONTE_VAZIA },
     maquininha: { ...FONTE_VAZIA },
     vendas: { ...FONTE_VAZIA }
   });
@@ -217,6 +221,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else if (formato === 'sistema-movimentacoes') {
           const linhas = parseMovimentacoesSistema(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
+        } else if (formato === 'sistema-transacoes' && chave === 'sistema') {
+          atualizarFonte(chave, {
+            carregando: false,
+            erro: 'Esse é o Relatório de Dados (Transações) — ele não traz a forma de pagamento de cada comanda. Suba o Relatório de Movimentações aqui (que tem a forma de pagamento) e, se quiser incluir as Assinaturas na conciliação, suba esse mesmo relatório no campo "Relatório de Dados/Transações do Sistema" logo abaixo.'
+          });
+        } else if (formato === 'sistema-transacoes') {
+          const linhas = parseTransacoesSistema(bruto);
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else {
           atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
@@ -371,7 +383,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     // Toda comanda do Sistema paga via Pix ou cartão (esteja ou não conciliada
     // com o extrato) — pra lançar o faturamento pelo valor BRUTO (o que o
     // cliente pagou), com a taxa da maquininha entrando como despesa separada.
-    const faturamentoBrutoSistema = fontes.sistema.linhas
+    // As Assinaturas (fontes.assinaturas, vindas do Relatório de Dados) entram
+    // na mesma lista — sem forma de pagamento conhecida, então nunca confirmam
+    // sozinhas contra o extrato/maquininha (ver formaPagamentoDesconhecida logo
+    // abaixo), mas pelo menos aparecem pra não ficar esquecidas.
+    const faturamentoBrutoSistema = [...fontes.sistema.linhas, ...fontes.assinaturas.linhas]
       .filter((l) => !l.viaDinheiro)
       .filter((l) => dentroDoPeriodoDoExtrato(l.data));
 
@@ -456,7 +472,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
     const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
       ...l,
-      confirmadoNoBanco: l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true),
+      // Sem forma de pagamento conhecida (Assinatura do Relatório de Dados),
+      // nunca dá pra confirmar sozinho — precisa sempre de conferência manual.
+      confirmadoNoBanco: l.formaPagamentoDesconhecida ? false : (l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)),
       dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
       ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
       ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
@@ -1200,7 +1218,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           Essas comandas do Sistema (Pix e Cartão) ainda não viraram Receita no app — mesmo as que já conciliaram com o extrato. Cada uma lança o valor BRUTO (o que o cliente pagou) como Receita e, quando teve taxa de maquininha, a taxa entra separada como Despesa — o efeito no saldo da Conta Corrente é igual ao valor líquido que realmente caiu no banco.
         </p>
         <p className="nota-formato">
-          <strong>✓ Confirmado</strong> = essa comanda já bateu com o extrato (Pix) ou com as vendas da maquininha, seja do Relatório de Vendas separado ou reconstruídas a partir do de Pagamentos (Cartão). <strong>⏳ Pendente</strong> = o Cash Barber diz que foi pago, mas ainda não achamos correspondência no banco/maquininha nesse período — pode ser só atraso de compensação, vale conferir antes de lançar.
+          <strong>✓ Confirmado</strong> = essa comanda já bateu com o extrato (Pix) ou com as vendas da maquininha, seja do Relatório de Vendas separado ou reconstruídas a partir do de Pagamentos (Cartão). <strong>⏳ Pendente</strong> = o Cash Barber diz que foi pago, mas ainda não achamos correspondência no banco/maquininha nesse período — pode ser só atraso de compensação, vale conferir antes de lançar. As <strong>Assinaturas</strong> (do Relatório de Dados/Transações) sempre ficam pendentes, porque esse relatório não traz a forma de pagamento — confira manualmente ("Casar com Lançamentos do Extrato" se foi Pix) antes de lançar.
         </p>
         <div className="resumo-grid">
           <div className="resumo-item">
@@ -1255,7 +1273,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 {l.confirmadoNoBanco ? (
                   <span className="badge-categoria" style={{ color: '#27ae60' }}>✓ Confirmado {l.viaPix ? 'no extrato' : 'na maquininha'}</span>
                 ) : (
-                  <span className="badge-categoria" style={{ color: '#c0862e' }}>⏳ Pendente {l.viaPix ? 'no extrato' : 'na maquininha'}</span>
+                  <span className="badge-categoria" style={{ color: '#c0862e' }}>⏳ Pendente {l.formaPagamentoDesconhecida ? '— forma de pagamento desconhecida, confira manualmente' : (l.viaPix ? 'no extrato' : 'na maquininha')}</span>
                 )}
                 {l.possivelDuplicata && (
                   <span className="badge-categoria" style={{ color: '#c0392b' }}> ⚠️ Parece já lançada antes</span>
@@ -1349,6 +1367,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
 
       {renderUpload('extrato')}
       {renderUpload('sistema')}
+      {renderUpload('assinaturas')}
       {renderUpload('maquininha')}
       {renderUpload('vendas')}
 
