@@ -549,13 +549,21 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       vendasCartao: {
         conciliado: passo4.pares.length,
         semCorrespondenciaVendas: passo4.semParA,
-        semCorrespondenciaSistema: passo4.semParB
+        semCorrespondenciaSistema: passo4.semParB,
+        // Todas as vendas (casadas ou não) — pra oferecer como candidato no
+        // casamento manual de uma comanda no cartão, igual o extrato serve
+        // pro Pix. Sem isso só dava pra ver as que já ficaram sem par.
+        todas: vendas
       },
       taxaMaquininha,
       taxaMaquininhaPorDia,
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
       paresPixExtratoSistema,
+      // Mesma ideia do paresPixExtratoSistema, só que pro cartão: qual venda
+      // da maquininha foi casada automaticamente com qual comanda — pra
+      // saber quem desconfirmar se ela "roubar" essa venda pra outra comanda.
+      paresCartaoVendaSistema: passo4.pares.map((p) => ({ vendaId: p.a.id, sistemaId: p.b.id })),
       vendasComPagamento,
       vendasDeArquivoSeparado,
       composicaoDepositos
@@ -810,17 +818,20 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const confirmarCasamentoManual = () => {
     if (!casamentoManual || casamentoManual.selecionados.size === 0) return;
     if (casamentoManual.lado === 'comanda') {
-      // A comanda em questão é confirmada; os lançamentos do extrato
-      // selecionados somem da lista de pendências (o dinheiro deles já está
-      // explicado pela comanda, que vai virar Receita no Faturamento Bruto).
-      // Se algum dos selecionados já tinha sido casado automaticamente com
-      // OUTRA comanda (mesmo valor, data próxima — comum com R$52,00, por
-      // exemplo), essa outra comanda volta a ficar pendente, porque a linha
-      // do extrato dela na verdade era essa que a Fernanda escolheu agora.
-      const paresPix = resultado.paresPixExtratoSistema || [];
+      // A comanda em questão é confirmada; os lançamentos selecionados
+      // (extrato pra Pix, vendas da maquininha pra cartão) somem da lista de
+      // pendências (o dinheiro deles já está explicado pela comanda, que vai
+      // virar Receita no Faturamento Bruto). Se algum dos selecionados já
+      // tinha sido casado automaticamente com OUTRA comanda (mesmo valor,
+      // data/horário próximos — comum com R$52,00, por exemplo), essa outra
+      // comanda volta a ficar pendente, porque o lançamento dela na verdade
+      // era esse que a Fernanda escolheu agora.
+      const comandaAlvo = (resultado.faturamentoBrutoSistema || []).find((x) => x.id === casamentoManual.id);
+      const pares = comandaAlvo?.viaCartao ? (resultado.paresCartaoVendaSistema || []) : (resultado.paresPixExtratoSistema || []);
+      const campoId = comandaAlvo?.viaCartao ? 'vendaId' : 'extratoId';
       const sistemaIdsParaDesconfirmar = new Set(
         [...casamentoManual.selecionados]
-          .map((extratoId) => paresPix.find((p) => p.extratoId === extratoId)?.sistemaId)
+          .map((id) => pares.find((p) => p[campoId] === id)?.sistemaId)
           .filter(Boolean)
       );
       setResultado((r) => ({
@@ -1305,17 +1316,28 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <button onClick={() => lancarFaturamentoBruto(l)} className="btn-pagar">Lançar</button>
               {!l.confirmadoNoBanco && (
                 <button onClick={() => iniciarCasamentoDeComanda(l.id)} className="btn-editar">
-                  {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id ? 'Cancelar Casamento' : 'Casar com Lançamentos do Extrato'}
+                  {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id
+                    ? 'Cancelar Casamento'
+                    : (l.viaCartao ? 'Casar com Vendas da Maquininha' : 'Casar com Lançamentos do Extrato')}
                 </button>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
               (() => {
-                const paresPix = resultado.paresPixExtratoSistema || [];
-                const todos = (fontes.extrato.linhas || [])
-                  .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
-                  .map((e) => ({ ...e, usadoPorSistemaId: paresPix.find((p) => p.extratoId === e.id)?.sistemaId || null }));
+                // Cartão não bate contra o extrato (o banco só mostra o
+                // depósito do dia inteiro agrupado) — oferece as vendas da
+                // maquininha como candidato em vez das linhas do extrato.
+                const todos = l.viaCartao
+                  ? (resultado.vendasCartao?.todas || [])
+                      .filter((v) => !ignorados.has(v.id))
+                      .map((v) => ({
+                        ...v,
+                        usadoPorSistemaId: (resultado.paresCartaoVendaSistema || []).find((p) => p.vendaId === v.id)?.sistemaId || null
+                      }))
+                  : (fontes.extrato.linhas || [])
+                      .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
+                      .map((e) => ({ ...e, usadoPorSistemaId: (resultado.paresPixExtratoSistema || []).find((p) => p.extratoId === e.id)?.sistemaId || null }));
                 const visiveis = mostrarJaCasados ? todos : todos.filter((e) => !e.usadoPorSistemaId);
                 const ocultos = todos.length - visiveis.length;
                 return renderPainelCasamentoManual(l.valorBruto, l.descricao, visiveis, ocultos);
