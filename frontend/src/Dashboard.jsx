@@ -40,6 +40,11 @@ function tipoVisualMovimentacao(mov) {
   return 'entrada';
 }
 
+function formatarMesLabel(mesISO) {
+  const [ano, mesNum] = mesISO.split('-');
+  return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
+}
+
 function GraficoLinhaFaturamento({ fechamentos }) {
   const [hover, setHover] = useState(null);
 
@@ -170,24 +175,25 @@ function GraficoBarrasDespesas({ contasAPagar }) {
   );
 }
 
-function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onFecharMes }) {
+function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, onFecharMes }) {
   const [copiado, setCopiado] = useState(false);
 
   const hoje = new Date();
   const mesAtualISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
   const [mesFechamento, setMesFechamento] = useState(mesAtualISO);
 
-  const faturamentoProdutosSalvo = faturamentoManual.find(f => f.mes === mesFechamento)?.faturamentoProdutos ?? 0;
+  const registroManualDoMes = faturamentoManual.find(f => f.mes === mesFechamento);
+  const faturamentoProdutosSalvo = registroManualDoMes?.faturamentoProdutos ?? 0;
+  const faturamentoTotalManualSalvo = registroManualDoMes?.faturamentoTotalManual ?? null;
   const [produtoInput, setProdutoInput] = useState(String(faturamentoProdutosSalvo || ''));
+  const [totalManualInput, setTotalManualInput] = useState(faturamentoTotalManualSalvo != null ? String(faturamentoTotalManualSalvo) : '');
   useEffect(() => {
     setProdutoInput(String(faturamentoProdutosSalvo || ''));
+    setTotalManualInput(faturamentoTotalManualSalvo != null ? String(faturamentoTotalManualSalvo) : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesFechamento]);
 
-  const mesLabel = (() => {
-    const [ano, mesNum] = mesFechamento.split('-');
-    return `${NOMES_MESES[parseInt(mesNum, 10) - 1]}/${ano}`;
-  })();
+  const mesLabel = formatarMesLabel(mesFechamento);
 
   // Faturamento Total/Outras Entradas vêm das movimentações de verdade
   // (lançadas manualmente ou via Conciliação), não de números digitados à
@@ -202,12 +208,22 @@ function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoM
   // toda comanda lançada via Conciliação (CATEGORIA_PADRAO_RECEBIMENTO) — o
   // Cash Barber não separa produto de serviço na comanda, por isso o
   // faturamento sai junto aqui e ela divide manualmente abaixo.
-  const faturamentoTotal = somarPorCategoria(({ nivel1, nivel2 }) => nivel1 === 'Receitas' && nivel2 === 'Produtos e Serviços');
+  const faturamentoTotalCalculado = somarPorCategoria(({ nivel1, nivel2 }) => nivel1 === 'Receitas' && nivel2 === 'Produtos e Serviços');
   const outrasEntradas = somarPorCategoria(({ nivel1, nivel2 }) => nivel1 === 'Receitas' && nivel2 !== 'Produtos e Serviços');
+  // Meses antigos (de antes de usar o sistema) não têm movimentação nenhuma
+  // lançada — pra esses, o valor digitado aqui manualmente vale como o
+  // Faturamento Total do mês, só pra manter um histórico.
+  const totalManualDigitado = parseFloat(totalManualInput) || 0;
+  const faturamentoTotal = totalManualDigitado > 0 ? totalManualDigitado : faturamentoTotalCalculado;
   const faturamentoProdutos = parseFloat(produtoInput) || 0;
   const faturamentoServicos = faturamentoTotal - faturamentoProdutos;
 
   const salvarProduto = () => onSalvarFaturamentoProdutos(mesFechamento, parseFloat(produtoInput) || 0);
+  const salvarTotalManual = () => onSalvarFaturamentoTotalManual(mesFechamento, parseFloat(totalManualInput) || 0);
+
+  const historicoFaturamento = faturamentoManual
+    .filter(f => f.faturamentoTotalManual != null)
+    .sort((a, b) => b.mes.localeCompare(a.mes));
 
   const somar = (campo) => barbeiros.reduce((soma, b) => soma + (comissoes[b.chave][campo] || 0), 0);
   const comissaoBruta = somar('servicos') + somar('produtos') + somar('assinatura');
@@ -278,6 +294,36 @@ ${linhasBarbeiros}`;
         </div>
       </div>
 
+      <div className="form-transferencia" style={{ marginBottom: 15 }}>
+        <div className="input-group">
+          <label>Faturamento Total — meses antigos ({mesLabel})</label>
+          <input type="number" value={totalManualInput} onChange={(e) => setTotalManualInput(e.target.value)} placeholder="0,00" />
+        </div>
+        <button onClick={salvarTotalManual} className="btn-editar">Salvar</button>
+      </div>
+      <p className="upload-dica" style={{ marginTop: -10, marginBottom: 15 }}>
+        Pra meses de antes de usar o sistema, sem movimentação lançada — digite aqui só o Faturamento Total do mês pra manter o histórico. Enquanto tiver algo digitado aqui, ele substitui o Faturamento Total calculado acima.
+      </p>
+
+      {historicoFaturamento.length > 0 && (
+        <div style={{ marginBottom: 15 }}>
+          <p className="venc" style={{ marginBottom: 8 }}>Histórico de Faturamento Total (lançado manualmente)</p>
+          <table className="tabela-saldo-conta">
+            <thead>
+              <tr><th>Mês</th><th>Faturamento Total</th></tr>
+            </thead>
+            <tbody>
+              {historicoFaturamento.map(f => (
+                <tr key={f.mes}>
+                  <td>{formatarMesLabel(f.mes)}</td>
+                  <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <pre className="resumo-texto">{texto}</pre>
       <div className="acoes" style={{ marginTop: 10 }}>
         <button onClick={copiar} className="btn-transferir">{copiado ? '✓ Copiado!' : 'Copiar Resumo'}</button>
@@ -331,7 +377,7 @@ function Observacoes({ notas, onAdicionarNota, onExcluirNota }) {
   );
 }
 
-export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onFecharMes, onAdicionarNota, onExcluirNota }) {
+export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, onFecharMes, onAdicionarNota, onExcluirNota }) {
   return (
     <div>
       <ResumoContabilidade
@@ -340,6 +386,7 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
         movimentacoes={movimentacoes}
         faturamentoManual={faturamentoManual}
         onSalvarFaturamentoProdutos={onSalvarFaturamentoProdutos}
+        onSalvarFaturamentoTotalManual={onSalvarFaturamentoTotalManual}
         onFecharMes={onFecharMes}
       />
 

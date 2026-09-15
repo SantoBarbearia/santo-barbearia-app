@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS dados_empresa (
 CREATE TABLE IF NOT EXISTS faturamento_manual (
   mes VARCHAR(7) PRIMARY KEY,
   faturamento_produtos DECIMAL(10, 2) DEFAULT 0,
+  faturamento_total DECIMAL(10, 2),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
