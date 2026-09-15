@@ -137,7 +137,7 @@ export default function App() {
   const [categorias, setCategorias] = useState([]);
   const [dadosEmpresa, setDadosEmpresa] = useState(DADOS_EMPRESA_VAZIO);
   const [faturamentoManual, setFaturamentoManual] = useState([]);
-  const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0 });
+  const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0, percentualCrescimento: 0 });
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -218,7 +218,8 @@ export default function App() {
       if (projecaoParametrosData) {
         setProjecaoParametros({
           dataAumento: projecaoParametrosData.data_aumento || '',
-          percentualAumento: parseFloat(projecaoParametrosData.percentual_aumento) || 0
+          percentualAumento: parseFloat(projecaoParametrosData.percentual_aumento) || 0,
+          percentualCrescimento: parseFloat(projecaoParametrosData.percentual_crescimento) || 0
         });
       }
 
@@ -1259,7 +1260,8 @@ export default function App() {
       const resultado = await supabase.from('parametros_projecao').upsert([{
         id: 1,
         data_aumento: novosParametros.dataAumento || null,
-        percentual_aumento: novosParametros.percentualAumento || 0
+        percentual_aumento: novosParametros.percentualAumento || 0,
+        percentual_crescimento: novosParametros.percentualCrescimento || 0
       }]);
       if (resultado.error) throw new Error(resultado.error.message);
     } catch (erro) {
@@ -1269,7 +1271,7 @@ export default function App() {
         'O que você acabou de digitar está aparecendo na tela, mas ainda NÃO foi salvo de verdade.\n\n' +
         'Motivo: ' + erro.message + '\n\n' +
         'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
-        'database/migracao_parametros_projecao.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
+        'database/migracao_percentual_crescimento.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
       );
     }
   };

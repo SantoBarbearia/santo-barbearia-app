@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS parametros_projecao (
   id BIGINT PRIMARY KEY DEFAULT 1,
   data_aumento DATE,
   percentual_aumento DECIMAL(6, 2),
+  percentual_crescimento DECIMAL(6, 2),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
