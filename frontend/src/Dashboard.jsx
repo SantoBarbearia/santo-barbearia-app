@@ -487,29 +487,30 @@ function calcularFarol(real, meta) {
   return 'vermelho';
 }
 
-// % de Crescimento não é mais digitado à mão: é calculado a partir do
-// histórico real (mesmo raciocínio da planilha da Fernanda) — compara cada
-// mês com o mesmo mês do ano anterior, soma tudo, e tira daí o % de Aumento
-// de Preço (que já está embutido nesse crescimento histórico) pra sobrar só
-// o crescimento orgânico.
+// % de Crescimento não é mais digitado à mão: é calculado igual à planilha
+// da Fernanda — Média(último ano fechado) / Média(ano anterior a esse) - 1,
+// menos o % de Aumento de Preço (que já está embutido nesse crescimento
+// histórico) pra sobrar só o crescimento orgânico. Usa sempre os dois
+// últimos anos fechados antes do ano corrente (nunca o ano em andamento,
+// que ainda está incompleto).
 function calcularCrescimentoHistorico(historico, percentualAumento) {
-  const porMes = {};
-  historico.forEach(f => { porMes[f.mes] = f.faturamentoTotal; });
+  const anoAtual = new Date().getFullYear();
+  const anoRecente = anoAtual - 1;
+  const anoAnterior = anoRecente - 1;
 
-  let somaAtual = 0;
-  let somaAnterior = 0;
-  historico.forEach(f => {
-    const [ano, mes] = f.mes.split('-').map(Number);
-    const mesAnteriorISO = `${ano - 1}-${String(mes).padStart(2, '0')}`;
-    const anterior = porMes[mesAnteriorISO];
-    if (anterior != null && anterior > 0) {
-      somaAtual += f.faturamentoTotal;
-      somaAnterior += anterior;
-    }
-  });
+  const valoresDoAno = (ano) => historico
+    .filter(f => f.mes.startsWith(`${ano}-`))
+    .map(f => f.faturamentoTotal);
+  const media = (valores) => valores.reduce((s, v) => s + v, 0) / valores.length;
 
-  if (somaAnterior <= 0) return null;
-  const crescimentoTotalHistorico = (somaAtual / somaAnterior - 1) * 100;
+  const valoresRecente = valoresDoAno(anoRecente);
+  const valoresAnterior = valoresDoAno(anoAnterior);
+  if (valoresRecente.length === 0 || valoresAnterior.length === 0) return null;
+
+  const mediaAnterior = media(valoresAnterior);
+  if (mediaAnterior <= 0) return null;
+
+  const crescimentoTotalHistorico = (media(valoresRecente) / mediaAnterior - 1) * 100;
   return crescimentoTotalHistorico - (parseFloat(percentualAumento) || 0);
 }
 
@@ -578,7 +579,7 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
     <div className="card">
       <h3>Projeção de Faturamento</h3>
       <p className="nota-formato">
-        Estima o faturamento dos meses do período abaixo que ainda não têm movimentação lançada: pega o mesmo mês do ano anterior e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima. Nos meses que já têm faturamento real, o farol mostra se bateu a meta projetada pra esse mês. O % de Crescimento é calculado sozinho a partir do histórico (comparação ano a ano), descontando o próprio % de Aumento de Preço que já está embutido nesse crescimento.
+        Estima o faturamento dos meses do período abaixo que ainda não têm movimentação lançada: pega o mesmo mês do ano anterior e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima. Nos meses que já têm faturamento real, o farol mostra se bateu a meta projetada pra esse mês. O % de Crescimento é calculado sozinho comparando a média dos dois últimos anos fechados do histórico, descontando o próprio % de Aumento de Preço que já está embutido nesse crescimento.
       </p>
       <div className="form-transferencia" style={{ marginBottom: 15 }}>
         <div className="input-group">
