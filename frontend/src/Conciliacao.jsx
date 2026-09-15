@@ -130,6 +130,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
   const [casamentoManual, setCasamentoManual] = useState(null);
   const [mostrarJaCasados, setMostrarJaCasados] = useState(false);
+  const [ocultarDuplicatas, setOcultarDuplicatas] = useState(false);
   const [secoesRecolhidas, setSecoesRecolhidas] = useState(new Set());
   const [depositosExpandidos, setDepositosExpandidos] = useState(new Set());
   const alternarDeposito = (id) => {
@@ -795,8 +796,13 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // escolher QUANTOS itens do outro lado juntos formam aquele pagamento —
   // cobre tanto "uma comanda paga em duas transferências" quanto "duas
   // comandas pagas com uma transferência só".
-  const iniciarCasamentoDeComanda = (comandaId) => {
-    setCasamentoManual((c) => (c?.lado === 'comanda' && c.id === comandaId ? null : { lado: 'comanda', id: comandaId, selecionados: new Set() }));
+  // "pool" (extrato ou maquininha) normalmente segue a forma de pagamento
+  // que o Cash Barber registrou (viaPix/viaCartao) — mas ela pode escolher
+  // manualmente o outro lado quando acha que a comanda foi fechada com a
+  // forma de pagamento errada (ex: fechou como Pix mas na real pagou no
+  // débito/crédito da maquininha).
+  const iniciarCasamentoDeComanda = (comandaId, pool) => {
+    setCasamentoManual((c) => (c?.lado === 'comanda' && c.id === comandaId && c.pool === pool ? null : { lado: 'comanda', id: comandaId, pool, selecionados: new Set() }));
     setMostrarJaCasados(false);
   };
 
@@ -835,9 +841,12 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       // data/horário próximos — comum com R$52,00, por exemplo), essa outra
       // comanda volta a ficar pendente, porque o lançamento dela na verdade
       // era esse que a Fernanda escolheu agora.
-      const comandaAlvo = (resultado.faturamentoBrutoSistema || []).find((x) => x.id === casamentoManual.id);
-      const pares = comandaAlvo?.viaCartao ? (resultado.paresCartaoVendaSistema || []) : (resultado.paresPixExtratoSistema || []);
-      const campoId = comandaAlvo?.viaCartao ? 'vendaId' : 'extratoId';
+      // Usa o "pool" escolhido no botão (Extrato/Pix ou Maquininha/Cartão),
+      // não a forma de pagamento que o Cash Barber registrou — ela pode ter
+      // escolhido o outro de propósito porque a comanda foi fechada com a
+      // forma errada.
+      const pares = casamentoManual.pool === 'cartao' ? (resultado.paresCartaoVendaSistema || []) : (resultado.paresPixExtratoSistema || []);
+      const campoId = casamentoManual.pool === 'cartao' ? 'vendaId' : 'extratoId';
       const sistemaIdsParaDesconfirmar = new Set(
         [...casamentoManual.selecionados]
           .map((id) => pares.find((p) => p[campoId] === id)?.sistemaId)
@@ -1290,7 +1299,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
             </div>
           );
         })()}
-        {visiveis.map((l) => (
+        {(ocultarDuplicatas ? visiveis.filter((l) => !l.possivelDuplicata) : visiveis).map((l) => (
           <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
             <input
               type="checkbox"
@@ -1324,20 +1333,30 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               />
               <button onClick={() => lancarFaturamentoBruto(l)} className="btn-pagar">Lançar</button>
               {!l.confirmadoNoBanco && (
-                <button onClick={() => iniciarCasamentoDeComanda(l.id)} className="btn-editar">
-                  {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id
-                    ? 'Cancelar Casamento'
-                    : (l.viaCartao ? 'Casar com Vendas da Maquininha' : 'Casar com Lançamentos do Extrato')}
-                </button>
+                <>
+                  <button onClick={() => iniciarCasamentoDeComanda(l.id, 'extrato')} className="btn-editar">
+                    {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id && casamentoManual.pool === 'extrato'
+                      ? 'Cancelar Casamento'
+                      : 'Casar com Extrato (Pix)'}
+                  </button>
+                  <button onClick={() => iniciarCasamentoDeComanda(l.id, 'cartao')} className="btn-editar">
+                    {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id && casamentoManual.pool === 'cartao'
+                      ? 'Cancelar Casamento'
+                      : 'Casar com Maquininha (Cartão)'}
+                  </button>
+                </>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
               (() => {
-                // Cartão não bate contra o extrato (o banco só mostra o
-                // depósito do dia inteiro agrupado) — oferece as vendas da
-                // maquininha como candidato em vez das linhas do extrato.
-                const todos = l.viaCartao
+                // A forma de pagamento que o Cash Barber registrou pode estar
+                // errada (fechou como Pix mas na real pagou no cartão, ou
+                // vice-versa) — por isso ela escolhe o "pool" no botão, em vez
+                // da gente decidir sozinho pelo l.viaCartao. Cartão não bate
+                // contra o extrato (o banco só mostra o depósito do dia
+                // inteiro agrupado), então usa as vendas da maquininha.
+                const todos = casamentoManual.pool === 'cartao'
                   ? (resultado.vendasCartao?.todas || [])
                       .filter((v) => !ignorados.has(v.id))
                       .map((v) => ({
@@ -1371,7 +1390,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         <p className="nota-formato">
           Esses recebimentos não passam pelo banco nem pela maquininha, então não têm com o que conciliar — lance direto no Caixa pra atualizar o saldo.
         </p>
-        {visiveis.map((l) => (
+        {(ocultarDuplicatas ? visiveis.filter((l) => !l.possivelDuplicata) : visiveis).map((l) => (
           <div key={l.id} className="item-conta divergencia-item divergencia-entrada">
             <div className="info-conta">
               <p className="desc">
@@ -1425,6 +1444,16 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
 
       {resultado && (
         <>
+          <div className="card">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ocultarDuplicatas}
+                onChange={(e) => setOcultarDuplicatas(e.target.checked)}
+              />
+              Ocultar "⚠️ Parece já lançada antes" — mostrar só o que realmente falta resolver
+            </label>
+          </div>
           <div className="card">
             {renderTituloSecao('Recebimentos', 'recebimentos')}
             {!secoesRecolhidas.has('recebimentos') && (
@@ -1591,7 +1620,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                     Lançar Todas as Taxas Diárias na Conta Corrente
                   </button>
                 </div>
-                {resultado.taxaMaquininhaPorDia.map((dia) => (
+                {(ocultarDuplicatas ? resultado.taxaMaquininhaPorDia.filter((d) => !d.possivelDuplicata) : resultado.taxaMaquininhaPorDia).map((dia) => (
                   <div key={dia.data} className="item-conta">
                     <span>
                       {formatarDataBR(dia.data)} — {formatarMoeda(dia.valor)}
