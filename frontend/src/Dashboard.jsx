@@ -434,20 +434,32 @@ ${linhasBarbeiros}`;
 function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, projecaoParametros, onSalvarProjecaoParametros }) {
   const [dataAumento, setDataAumento] = useState(projecaoParametros.dataAumento || '');
   const [percentualAumento, setPercentualAumento] = useState(String(projecaoParametros.percentualAumento || ''));
+  const [percentualCrescimento, setPercentualCrescimento] = useState(String(projecaoParametros.percentualCrescimento || ''));
 
   useEffect(() => {
     setDataAumento(projecaoParametros.dataAumento || '');
     setPercentualAumento(String(projecaoParametros.percentualAumento || ''));
-  }, [projecaoParametros.dataAumento, projecaoParametros.percentualAumento]);
+    setPercentualCrescimento(String(projecaoParametros.percentualCrescimento || ''));
+  }, [projecaoParametros.dataAumento, projecaoParametros.percentualAumento, projecaoParametros.percentualCrescimento]);
 
-  const salvar = () => onSalvarProjecaoParametros({ dataAumento, percentualAumento: parseFloat(percentualAumento) || 0 });
+  const salvar = () => onSalvarProjecaoParametros({
+    dataAumento,
+    percentualAumento: parseFloat(percentualAumento) || 0,
+    percentualCrescimento: parseFloat(percentualCrescimento) || 0
+  });
 
   const historico = montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoes);
   const porMes = {};
   historico.forEach(f => { porMes[f.mes] = f; });
 
   const anoAtual = new Date().getFullYear();
-  const percentual = parseFloat(percentualAumento) || 0;
+  // Mesma conta da planilha: pega o mesmo mês do ano anterior e aplica os
+  // dois percentuais somados (aumento de preço + crescimento), igual em
+  // todo mês do ano — o aumento de preço normalmente acontece uma vez, no
+  // fim do ano anterior, então já vale pro ano inteiro sendo projetado; por
+  // isso a data serve só de referência de quando foi, sem entrar na conta
+  // mês a mês.
+  const fatorAjuste = 1 + ((parseFloat(percentualAumento) || 0) + (parseFloat(percentualCrescimento) || 0)) / 100;
 
   const linhas = [];
   for (let mes = 1; mes <= 12; mes++) {
@@ -463,11 +475,7 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
       linhas.push({ mes: mesISO, valor: null, origem: 'sem-dado' });
       continue;
     }
-    // Se o mês correspondente do ano anterior já era depois da data do
-    // aumento, ele já reflete o preço novo — não aplica o % de novo.
-    const jaReflete = dataAumento && mesAnteriorISO >= dataAumento.slice(0, 7);
-    const valor = jaReflete ? base.faturamentoTotal : base.faturamentoTotal * (1 + percentual / 100);
-    linhas.push({ mes: mesISO, valor, origem: 'projetado' });
+    linhas.push({ mes: mesISO, valor: base.faturamentoTotal * fatorAjuste, origem: 'projetado' });
   }
 
   const totalAno = linhas.reduce((s, l) => s + (l.valor || 0), 0);
@@ -477,16 +485,20 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
     <div className="card">
       <h3>Projeção de Faturamento ({anoAtual})</h3>
       <p className="nota-formato">
-        Estima o faturamento dos meses de {anoAtual} que ainda não têm movimentação lançada, usando o mesmo mês de {anoAtual - 1} como base. Quando esse mês do ano anterior for de antes do aumento de preço, aplica o % informado abaixo pra trazer o valor pro preço atual antes de projetar.
+        Estima o faturamento dos meses de {anoAtual} que ainda não têm movimentação lançada: pega o mesmo mês de {anoAtual - 1} e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima.
       </p>
       <div className="form-transferencia" style={{ marginBottom: 15 }}>
         <div className="input-group">
-          <label>Data do aumento de preço</label>
+          <label>Data do último aumento de preço (referência)</label>
           <input type="date" value={dataAumento} onChange={(e) => setDataAumento(e.target.value)} />
         </div>
         <div className="input-group">
-          <label>% de aumento em relação ao ano anterior</label>
+          <label>% de Aumento de Preço</label>
           <input type="number" value={percentualAumento} onChange={(e) => setPercentualAumento(e.target.value)} placeholder="0,0" />
+        </div>
+        <div className="input-group">
+          <label>% de Crescimento</label>
+          <input type="number" value={percentualCrescimento} onChange={(e) => setPercentualCrescimento(e.target.value)} placeholder="0,0" />
         </div>
         <button onClick={salvar} className="btn-editar">Salvar</button>
       </div>
