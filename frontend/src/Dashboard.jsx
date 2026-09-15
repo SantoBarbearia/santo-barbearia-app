@@ -267,6 +267,8 @@ function GraficoBarrasDespesas({ contasAPagar }) {
 
 function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, onFecharMes }) {
   const [copiado, setCopiado] = useState(false);
+  const [historicoAberto, setHistoricoAberto] = useState(false);
+  const [filtroAnoHistorico, setFiltroAnoHistorico] = useState('todos');
 
   const hoje = new Date();
   const mesAtualISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
@@ -314,6 +316,10 @@ function ResumoContabilidade({ comissoes, barbeiros, movimentacoes, faturamentoM
   const historicoFaturamento = faturamentoManual
     .filter(f => f.faturamentoTotalManual != null)
     .sort((a, b) => b.mes.localeCompare(a.mes));
+  const anosHistorico = [...new Set(historicoFaturamento.map(f => f.mes.slice(0, 4)))].sort((a, b) => b.localeCompare(a));
+  const historicoFiltrado = filtroAnoHistorico === 'todos'
+    ? historicoFaturamento
+    : historicoFaturamento.filter(f => f.mes.slice(0, 4) === filtroAnoHistorico);
 
   const somar = (campo) => barbeiros.reduce((soma, b) => soma + (comissoes[b.chave][campo] || 0), 0);
   const comissaoBruta = somar('servicos') + somar('produtos') + somar('assinatura');
@@ -397,28 +403,48 @@ ${linhasBarbeiros}`;
 
       {historicoFaturamento.length > 0 && (
         <div style={{ marginBottom: 15 }}>
-          <p className="venc" style={{ marginBottom: 8 }}>Histórico de Faturamento Total (lançado manualmente)</p>
-          <table className="tabela-saldo-conta">
-            <thead>
-              <tr><th>Mês</th><th>Faturamento Total</th><th>Faturamento de Produtos</th><th>Faturamento de Serviços</th><th>% Produtos sobre Serviços</th></tr>
-            </thead>
-            <tbody>
-              {historicoFaturamento.map(f => {
-                const produtos = f.faturamentoProdutos || 0;
-                const servicos = f.faturamentoTotalManual - produtos;
-                const percentual = servicos > 0 ? `${((produtos / servicos) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : '—';
-                return (
-                  <tr key={f.mes}>
-                    <td>{formatarMesLabel(f.mes)}</td>
-                    <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
-                    <td>{formatarMoeda(produtos)}</td>
-                    <td>{formatarMoeda(servicos)}</td>
-                    <td>{percentual}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <button
+            onClick={() => setHistoricoAberto(!historicoAberto)}
+            className="btn-editar"
+            style={{ marginBottom: historicoAberto ? 8 : 0 }}
+          >
+            {historicoAberto ? '▲ Ocultar' : '▼ Mostrar'} Histórico de Faturamento Total ({historicoFaturamento.length} {historicoFaturamento.length === 1 ? 'mês' : 'meses'})
+          </button>
+
+          {historicoAberto && (
+            <>
+              {anosHistorico.length > 1 && (
+                <div className="input-group" style={{ maxWidth: 160, marginBottom: 8 }}>
+                  <label>Filtrar por ano</label>
+                  <select value={filtroAnoHistorico} onChange={(e) => setFiltroAnoHistorico(e.target.value)}>
+                    <option value="todos">Todos</option>
+                    {anosHistorico.map(ano => <option key={ano} value={ano}>{ano}</option>)}
+                  </select>
+                </div>
+              )}
+              <table className="tabela-saldo-conta">
+                <thead>
+                  <tr><th>Mês</th><th>Faturamento Total</th><th>Faturamento de Produtos</th><th>Faturamento de Serviços</th><th>% Produtos sobre Serviços</th></tr>
+                </thead>
+                <tbody>
+                  {historicoFiltrado.map(f => {
+                    const produtos = f.faturamentoProdutos || 0;
+                    const servicos = f.faturamentoTotalManual - produtos;
+                    const percentual = servicos > 0 ? `${((produtos / servicos) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : '—';
+                    return (
+                      <tr key={f.mes}>
+                        <td>{formatarMesLabel(f.mes)}</td>
+                        <td>{formatarMoeda(f.faturamentoTotalManual)}</td>
+                        <td>{formatarMoeda(produtos)}</td>
+                        <td>{formatarMoeda(servicos)}</td>
+                        <td>{percentual}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
+          )}
         </div>
       )}
 
@@ -429,6 +455,43 @@ ${linhasBarbeiros}`;
       </div>
     </div>
   );
+}
+
+// Lista "YYYY-MM" de cada mês entre início e fim (inclusive), nessa ordem
+// mesmo se vierem trocados.
+function enumerarMeses(inicio, fim) {
+  let [anoI, mesI] = inicio.split('-').map(Number);
+  let [anoF, mesF] = fim.split('-').map(Number);
+  if (anoI > anoF || (anoI === anoF && mesI > mesF)) {
+    [anoI, anoF] = [anoF, anoI];
+    [mesI, mesF] = [mesF, mesI];
+  }
+  const meses = [];
+  let ano = anoI, mes = mesI;
+  while (ano < anoF || (ano === anoF && mes <= mesF)) {
+    meses.push(`${ano}-${String(mes).padStart(2, '0')}`);
+    mes++;
+    if (mes > 12) { mes = 1; ano++; }
+  }
+  return meses;
+}
+
+// Farol: compara o faturamento real do mês com a meta projetada pra ele.
+// 100% ou mais bate a meta (verde), entre 80% e 100% chegou perto (amarelo),
+// abaixo de 80% ficou longe (vermelho).
+function calcularFarol(real, meta) {
+  if (!meta || meta <= 0) return null;
+  const percentual = real / meta;
+  if (percentual >= 1) return 'verde';
+  if (percentual >= 0.8) return 'amarelo';
+  return 'vermelho';
+}
+
+const CORES_FAROL = { verde: '#27ae60', amarelo: '#f0ad4e', vermelho: '#c0392b' };
+
+function Farol({ cor, titulo }) {
+  if (!cor) return <span style={{ color: '#ccc' }}>—</span>;
+  return <span title={titulo} style={{ display: 'inline-block', width: 14, height: 14, borderRadius: '50%', background: CORES_FAROL[cor] }}></span>;
 }
 
 function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, projecaoParametros, onSalvarProjecaoParametros }) {
@@ -448,45 +511,56 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
     percentualCrescimento: parseFloat(percentualCrescimento) || 0
   });
 
+  const anoAtual = new Date().getFullYear();
+  const [periodoInicio, setPeriodoInicio] = useState(`${anoAtual}-01`);
+  const [periodoFim, setPeriodoFim] = useState(`${anoAtual}-12`);
+
   const historico = montarHistoricoFaturamento(fechamentos, faturamentoManual, movimentacoes);
   const porMes = {};
   historico.forEach(f => { porMes[f.mes] = f; });
 
-  const anoAtual = new Date().getFullYear();
   // Mesma conta da planilha: pega o mesmo mês do ano anterior e aplica os
   // dois percentuais somados (aumento de preço + crescimento), igual em
-  // todo mês do ano — o aumento de preço normalmente acontece uma vez, no
-  // fim do ano anterior, então já vale pro ano inteiro sendo projetado; por
-  // isso a data serve só de referência de quando foi, sem entrar na conta
-  // mês a mês.
+  // todo mês do período — o aumento de preço normalmente acontece uma vez,
+  // no fim do ano anterior, então já vale pro ano inteiro sendo projetado;
+  // por isso a data serve só de referência de quando foi, sem entrar na
+  // conta mês a mês.
   const fatorAjuste = 1 + ((parseFloat(percentualAumento) || 0) + (parseFloat(percentualCrescimento) || 0)) / 100;
 
-  const linhas = [];
-  for (let mes = 1; mes <= 12; mes++) {
-    const mesISO = `${anoAtual}-${String(mes).padStart(2, '0')}`;
-    const mesAnteriorISO = `${anoAtual - 1}-${String(mes).padStart(2, '0')}`;
+  const linhas = enumerarMeses(periodoInicio, periodoFim).map((mesISO) => {
+    const [ano, mes] = mesISO.split('-').map(Number);
+    const mesAnteriorISO = `${ano - 1}-${String(mes).padStart(2, '0')}`;
+    const base = porMes[mesAnteriorISO];
+    const meta = base ? base.faturamentoTotal * fatorAjuste : null;
+
     const real = porMes[mesISO];
     if (real && real.faturamentoTotal > 0) {
-      linhas.push({ mes: mesISO, valor: real.faturamentoTotal, origem: 'real' });
-      continue;
+      return { mes: mesISO, valor: real.faturamentoTotal, meta, origem: 'real', farol: calcularFarol(real.faturamentoTotal, meta) };
     }
-    const base = porMes[mesAnteriorISO];
-    if (!base) {
-      linhas.push({ mes: mesISO, valor: null, origem: 'sem-dado' });
-      continue;
-    }
-    linhas.push({ mes: mesISO, valor: base.faturamentoTotal * fatorAjuste, origem: 'projetado' });
-  }
+    if (meta == null) return { mes: mesISO, valor: null, meta: null, origem: 'sem-dado', farol: null };
+    return { mes: mesISO, valor: meta, meta, origem: 'projetado', farol: null };
+  });
 
-  const totalAno = linhas.reduce((s, l) => s + (l.valor || 0), 0);
+  const totalPeriodo = linhas.reduce((s, l) => s + (l.valor || 0), 0);
   const rotuloOrigem = { real: 'Real', projetado: 'Projetado', 'sem-dado': 'Sem dado' };
+  const rotuloFarol = { verde: 'Bateu a meta', amarelo: 'Perto da meta (80% a 99%)', vermelho: 'Longe da meta (abaixo de 80%)' };
 
   return (
     <div className="card">
-      <h3>Projeção de Faturamento ({anoAtual})</h3>
+      <h3>Projeção de Faturamento</h3>
       <p className="nota-formato">
-        Estima o faturamento dos meses de {anoAtual} que ainda não têm movimentação lançada: pega o mesmo mês de {anoAtual - 1} e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima.
+        Estima o faturamento dos meses do período abaixo que ainda não têm movimentação lançada: pega o mesmo mês do ano anterior e aplica o % de Aumento de Preço + % de Crescimento (somados) por cima. Nos meses que já têm faturamento real, o farol mostra se bateu a meta projetada pra esse mês.
       </p>
+      <div className="form-transferencia" style={{ marginBottom: 15 }}>
+        <div className="input-group">
+          <label>Período — De</label>
+          <input type="month" value={periodoInicio} onChange={(e) => setPeriodoInicio(e.target.value)} />
+        </div>
+        <div className="input-group">
+          <label>Período — Até</label>
+          <input type="month" value={periodoFim} onChange={(e) => setPeriodoFim(e.target.value)} />
+        </div>
+      </div>
       <div className="form-transferencia" style={{ marginBottom: 15 }}>
         <div className="input-group">
           <label>Data do último aumento de preço (referência)</label>
@@ -505,19 +579,23 @@ function ProjecaoFaturamento({ fechamentos, faturamentoManual, movimentacoes, pr
 
       <table className="tabela-saldo-conta">
         <thead>
-          <tr><th>Mês</th><th>Faturamento</th><th>Origem</th></tr>
+          <tr><th>Mês</th><th>Faturamento</th><th>Meta Projetada</th><th>Farol</th><th>Origem</th></tr>
         </thead>
         <tbody>
           {linhas.map(l => (
             <tr key={l.mes}>
               <td>{formatarMesLabel(l.mes)}</td>
               <td>{l.valor != null ? formatarMoeda(l.valor) : '—'}</td>
+              <td>{l.meta != null ? formatarMoeda(l.meta) : '—'}</td>
+              <td><Farol cor={l.farol} titulo={l.farol ? rotuloFarol[l.farol] : ''} /></td>
               <td>{rotuloOrigem[l.origem]}</td>
             </tr>
           ))}
           <tr>
-            <td><strong>Total do Ano</strong></td>
-            <td><strong>{formatarMoeda(totalAno)}</strong></td>
+            <td><strong>Total do Período</strong></td>
+            <td><strong>{formatarMoeda(totalPeriodo)}</strong></td>
+            <td></td>
+            <td></td>
             <td></td>
           </tr>
         </tbody>
