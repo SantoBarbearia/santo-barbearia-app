@@ -206,7 +206,11 @@ export default function App() {
       if (categoriasData) setCategorias(categoriasData);
       if (dadosEmpresaData) setDadosEmpresa(paraEstadoDadosEmpresa(dadosEmpresaData));
       if (faturamentoManualData) {
-        setFaturamentoManual(faturamentoManualData.map((l) => ({ mes: l.mes, faturamentoProdutos: parseFloat(l.faturamento_produtos) || 0 })));
+        setFaturamentoManual(faturamentoManualData.map((l) => ({
+          mes: l.mes,
+          faturamentoProdutos: parseFloat(l.faturamento_produtos) || 0,
+          faturamentoTotalManual: l.faturamento_total !== null && l.faturamento_total !== undefined ? parseFloat(l.faturamento_total) : null
+        })));
       }
 
     } catch (erro) {
@@ -1210,26 +1214,32 @@ export default function App() {
     }
   };
 
-  // Faturamento de Produtos digitado no Resumo para Contabilidade — mesmo
-  // esquema de salvamento dedicado dos Dados da Empresa (tabela própria,
-  // pode ainda não existir em quem não rodou a migração).
-  const handleSalvarFaturamentoProdutos = async (mes, valor) => {
-    const novaLista = [...faturamentoManual.filter((f) => f.mes !== mes), { mes, faturamentoProdutos: valor }];
+  // Faturamento de Produtos e Faturamento Total (histórico de meses antigos)
+  // digitados no Resumo para Contabilidade — mesmo esquema de salvamento
+  // dedicado dos Dados da Empresa (tabela própria, pode ainda não existir em
+  // quem não rodou a migração). Cada campo salva só a sua própria coluna, sem
+  // mexer no valor do outro campo daquele mesmo mês.
+  const handleSalvarFaturamentoManual = async (mes, colunaDb, valor) => {
+    const campoEstado = colunaDb === 'faturamento_produtos' ? 'faturamentoProdutos' : 'faturamentoTotalManual';
+    const existente = faturamentoManual.find((f) => f.mes === mes) || { mes, faturamentoProdutos: 0, faturamentoTotalManual: null };
+    const novaLista = [...faturamentoManual.filter((f) => f.mes !== mes), { ...existente, [campoEstado]: valor }];
     setFaturamentoManual(novaLista);
     try {
-      const resultado = await supabase.from('faturamento_manual').upsert([{ mes, faturamento_produtos: valor }]);
+      const resultado = await supabase.from('faturamento_manual').upsert([{ mes, [colunaDb]: valor }]);
       if (resultado.error) throw new Error(resultado.error.message);
     } catch (erro) {
-      console.error('Erro ao salvar faturamento de produtos:', erro);
+      console.error('Erro ao salvar faturamento manual:', erro);
       alert(
-        'ATENÇÃO: não consegui salvar o Faturamento de Produtos no banco de dados!\n\n' +
+        'ATENÇÃO: não consegui salvar esse valor no banco de dados!\n\n' +
         'O que você acabou de digitar está aparecendo na tela, mas ainda NÃO foi salvo de verdade.\n\n' +
         'Motivo: ' + erro.message + '\n\n' +
         'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
-        'database/migracao_faturamento_manual.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
+        'database/migracao_faturamento_total_manual.sql no SQL Editor do Supabase uma vez, depois repita o Salvar aqui.'
       );
     }
   };
+  const handleSalvarFaturamentoProdutos = (mes, valor) => handleSalvarFaturamentoManual(mes, 'faturamento_produtos', valor);
+  const handleSalvarFaturamentoTotalManual = (mes, valor) => handleSalvarFaturamentoManual(mes, 'faturamento_total', valor);
 
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
@@ -2253,6 +2263,7 @@ export default function App() {
                 movimentacoes={movimentacoes}
                 faturamentoManual={faturamentoManual}
                 onSalvarFaturamentoProdutos={handleSalvarFaturamentoProdutos}
+                onSalvarFaturamentoTotalManual={handleSalvarFaturamentoTotalManual}
                 onFecharMes={handleFecharMes}
                 onAdicionarNota={handleAdicionarNota}
                 onExcluirNota={handleExcluirNota}
