@@ -17,6 +17,7 @@ import {
   parseBalancoSistema,
   parseMovimentacoesSistema,
   parseTransacoesSistema,
+  parseTransacoesFinanceiras,
   calcularTaxasPagamentos,
   calcularTaxasVendas,
   calcularTaxasPagamentosPorDia,
@@ -34,13 +35,15 @@ const NOTAS_FORMATO = {
   'sicredi-vendas': 'Relatório de Vendas da Sicredi reconhecido: uma linha por venda (valor bruto, antes do desconto da maquininha), pra conferir com o Sistema.',
   'balanco-sistema': 'Balanço do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas) já pagos.',
   'sistema-movimentacoes': 'Relatório de Movimentações do sistema reconhecido: recebimentos via Pix (conferidos com o extrato) e via cartão (conferidos com o relatório de Vendas). Esse relatório não traz a taxa da maquininha por comanda — use "Vendas × Pagamentos da Maquininha" pra conferir a taxa real de cada venda no cartão.',
-  'sistema-transacoes': 'Relatório de Dados (Transações) do sistema reconhecido: usamos só as linhas de Assinatura daqui (as de Comanda já vêm pelo Relatório de Movimentações, com a forma de pagamento). Como esse relatório não traz a forma de pagamento, as assinaturas aparecem sempre como pendentes — a confirmação com o extrato/maquininha precisa ser manual.'
+  'sistema-transacoes': 'Relatório de Dados (Transações) do sistema reconhecido: usamos só as linhas de Assinatura daqui (as de Comanda já vêm pelo Relatório de Movimentações, com a forma de pagamento). Como esse relatório não traz a forma de pagamento, as assinaturas aparecem sempre como pendentes — a confirmação com o extrato/maquininha precisa ser manual.',
+  'transacoes-financeiras': 'Relatório de Transações Financeiras do Cash Barber reconhecido: assinaturas que o próprio Cash Barber cobra no cartão do cliente. As que baterem por cliente + valor com uma Assinatura pendente saem do Faturamento Bruto do Sistema e vão pro card "Aguardando Resgate do Cash Barber" — não contam como Receita até você lançar o resgate de lá.'
 };
 
 const LABELS_FONTE = {
   extrato: 'Extrato Bancário',
   sistema: 'Relatório do Sistema',
   assinaturas: 'Relatório de Dados/Transações do Sistema (opcional, pra assinaturas)',
+  financeiro: 'Relatório de Transações Financeiras (opcional, assinaturas cobradas pelo Cash Barber)',
   maquininha: 'Relatório de Pagamentos da Maquininha',
   vendas: 'Relatório de Vendas da Maquininha (opcional)'
 };
@@ -119,11 +122,24 @@ function chaveNaoIdentificado(l) {
   return `${l.descricao}|${l.valorBruto.toFixed(2)}`;
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado }) {
+// Reduz um nome de cliente ao "miolo" (minúsculo, sem acento, espaços
+// simples) pra comparar o nome do Sistema com o do Relatório de Transações
+// Financeiras mesmo com pequenas diferenças de grafia/acentuação entre eles.
+function normalizarNome(nome) {
+  return String(nome || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado, resgatesCashBarberLancados, onLancarResgateCashBarber }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
     assinaturas: { ...FONTE_VAZIA },
+    financeiro: { ...FONTE_VAZIA },
     maquininha: { ...FONTE_VAZIA },
     vendas: { ...FONTE_VAZIA }
   });
@@ -135,6 +151,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [dividindo, setDividindo] = useState(null);
   const [partesDivisao, setPartesDivisao] = useState([]);
   const [selecionadosFaturamento, setSelecionadosFaturamento] = useState(new Set());
+  const [selecionadosResgate, setSelecionadosResgate] = useState(new Set());
+  const [dataResgateForm, setDataResgateForm] = useState(new Date().toISOString().slice(0, 10));
   const [casamentoManual, setCasamentoManual] = useState(null);
   const [mostrarJaCasados, setMostrarJaCasados] = useState(false);
   const [ocultarDuplicatas, setOcultarDuplicatas] = useState(false);
@@ -246,6 +264,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           });
         } else if (formato === 'sistema-transacoes') {
           const linhas = parseTransacoesSistema(bruto);
+          finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
+        } else if (formato === 'transacoes-financeiras') {
+          const linhas = parseTransacoesFinanceiras(bruto);
           finalizarComLinhas(chave, linhas, arquivo.name, NOTAS_FORMATO[formato]);
         } else {
           atualizarFonte(chave, { bruto, arquivo: arquivo.name, carregando: false });
@@ -487,16 +508,51 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const ordemPagamentoPorSistemaId = new Map(
       passo4.pares.filter((p) => p.a.ordemPagamento !== undefined && p.a.ordemPagamento !== null).map((p) => [p.b.id, p.a.ordemPagamento])
     );
-    const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
-      ...l,
-      // Sem forma de pagamento conhecida (Assinatura do Relatório de Dados),
-      // nunca dá pra confirmar sozinho — precisa sempre de conferência manual.
-      confirmadoNoBanco: l.formaPagamentoDesconhecida ? false : (l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)),
-      dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
-      ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
-      ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
-      possivelDuplicata: foiLancadoAntes(creditosManuaisSicredi, l.descricao, l.valorBruto)
-    }));
+
+    // Assinatura que o Cash Barber cobra direto no cartão do cliente (o
+    // Relatório de Transações Financeiras): casa por cliente + valor bruto
+    // com uma Assinatura pendente (formaPagamentoDesconhecida). Quando bate,
+    // essa comanda sai do Faturamento Bruto do Sistema — não é mais "forma
+    // de pagamento a descobrir", já sabemos que veio por aí — e passa a
+    // aparecer só no card "Aguardando Resgate do Cash Barber", onde só vira
+    // Receita de verdade quando ela lançar o resgate manualmente.
+    const financeiroDisponivel = [...fontes.financeiro.linhas];
+    const usadosFinanceiro = new Set();
+    const resgatePorSistemaId = new Map();
+    fontes.assinaturas.linhas.forEach((l) => {
+      const nomeAlvo = normalizarNome(l.cliente);
+      const candidato = financeiroDisponivel.find((f) =>
+        !usadosFinanceiro.has(f.id) &&
+        normalizarNome(f.cliente) === nomeAlvo &&
+        Math.abs(f.valorBruto - l.valorBruto) < 0.01
+      );
+      if (candidato) {
+        usadosFinanceiro.add(candidato.id);
+        resgatePorSistemaId.set(l.id, candidato);
+      }
+    });
+
+    const faturamentoBrutoComStatus = faturamentoBrutoSistema
+      .filter((l) => !resgatePorSistemaId.has(l.id))
+      .map((l) => ({
+        ...l,
+        // Sem forma de pagamento conhecida (Assinatura do Relatório de Dados),
+        // nunca dá pra confirmar sozinho — precisa sempre de conferência manual.
+        confirmadoNoBanco: l.formaPagamentoDesconhecida ? false : (l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)),
+        dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
+        ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
+        ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
+        possivelDuplicata: foiLancadoAntes(creditosManuaisSicredi, l.descricao, l.valorBruto)
+      }));
+
+    // Lista do card "Aguardando Resgate do Cash Barber" — todas as transações
+    // do relatório financeiro (o próprio card filtra, ao exibir, as que já
+    // foram incluídas num resgate lançado — igual "Pagamento Não
+    // Identificado" já faz, pra sumir na hora, sem precisar reconciliar de
+    // novo). "casada" só indica se achamos a Assinatura correspondente no
+    // Sistema (informativo).
+    const aguardandoResgateCashBarber = fontes.financeiro.linhas
+      .map((f) => ({ ...f, casada: usadosFinanceiro.has(f.id) }));
 
     // Elo que faltava na cadeia do cartão: hoje o Sistema bate com Vendas
     // (passo4, por valor+data) e o Extrato bate com Pagamentos agrupado por
@@ -576,6 +632,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       taxaMaquininhaPorDia,
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
+      aguardandoResgateCashBarber,
       paresPixExtratoSistema,
       // Mesma ideia do paresPixExtratoSistema, só que pro cartão: qual venda
       // da maquininha foi casada automaticamente com qual comanda — pra
@@ -589,6 +646,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setTaxaJaLancada(false);
     setDiasTaxaLancados(new Set());
     setSelecionadosFaturamento(new Set());
+    setSelecionadosResgate(new Set());
     setCasamentoManual(null);
   };
 
@@ -757,6 +815,27 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       if (novo.has(id)) novo.delete(id); else novo.add(id);
       return novo;
     });
+  };
+
+  const toggleSelecaoResgate = (id) => {
+    setSelecionadosResgate((s) => {
+      const novo = new Set(s);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return novo;
+    });
+  };
+
+  // Junta as transações do resgate selecionadas num só lançamento: o valor
+  // BRUTO de todas vira Receita e a soma dos descontos (taxa que o Cash
+  // Barber já embute) vira Despesa separada — igual o Faturamento Bruto do
+  // Sistema já faz com a taxa da maquininha. A data é a que ela escolher (o
+  // dia em que o Pix do resgate realmente caiu no Sicredi), não a de
+  // liquidação — essa é só informativa (ver nota em parseTransacoesFinanceiras).
+  const lancarResgateCashBarber = () => {
+    const itens = (resultado.aguardandoResgateCashBarber || []).filter((f) => selecionadosResgate.has(f.id));
+    if (itens.length === 0 || !dataResgateForm) return;
+    onLancarResgateCashBarber(itens, dataResgateForm);
+    setSelecionadosResgate(new Set());
   };
 
   // Às vezes o cliente faz um pagamento só (um Pix, por exemplo) que no Cash
@@ -1391,6 +1470,68 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
 
+  // Assinaturas cobradas pelo próprio Cash Barber (Relatório de Transações
+  // Financeiras) — ficam de lado, sem entrar no Faturamento Bruto nem contar
+  // como Receita, até ela agrupar as que vieram no mesmo resgate e lançar de
+  // uma vez só (bruto como Receita, desconto do Cash Barber como Despesa).
+  const renderAguardandoResgateCashBarber = () => {
+    const idsJaLancados = new Set((resgatesCashBarberLancados || []).map((r) => r.transacao_id));
+    const visiveis = ordenarPorDataHora(
+      (resultado.aguardandoResgateCashBarber || []).filter((f) => !idsJaLancados.has(f.transacaoId))
+    );
+    if (visiveis.length === 0) return null;
+    const selecionados = visiveis.filter((f) => selecionadosResgate.has(f.id));
+    const somaBruto = selecionados.reduce((s, f) => s + f.valorBruto, 0);
+    const somaDesconto = selecionados.reduce((s, f) => s + f.desconto, 0);
+    const somaLiquido = selecionados.reduce((s, f) => s + f.valorLiquido, 0);
+    return (
+      <div className="card">
+        {renderTituloSecao('Aguardando Resgate do Cash Barber', 'aguardandoResgate')}
+        {!secoesRecolhidas.has('aguardandoResgate') && (
+        <>
+        <p className="nota-formato">
+          Assinaturas que o próprio Cash Barber cobrou no cartão do cliente — não entram no Faturamento Bruto nem contam como Receita ainda. <strong>Venda</strong> é quando o cliente pagou; <strong>disponível para resgate a partir de</strong> é só quando o valor fica liberado pra você pedir o resgate — o Pix cai numa data que só você escolhe. Marque as que vieram juntas no mesmo resgate e lance de uma vez: a soma bruta vira Receita e a soma dos descontos vira Despesa separada.
+        </p>
+        {visiveis.map((f) => (
+          <div key={f.id} className="item-conta divergencia-item divergencia-entrada">
+            <input
+              type="checkbox"
+              checked={selecionadosResgate.has(f.id)}
+              onChange={() => toggleSelecaoResgate(f.id)}
+              style={{ marginRight: 10, width: 18, height: 18 }}
+            />
+            <div className="info-conta">
+              <p className="desc">
+                {f.descricao}
+                {!f.casada && (
+                  <span className="badge-categoria" style={{ color: '#c0862e' }}> — não achamos a assinatura correspondente no Relatório de Dados, confira</span>
+                )}
+              </p>
+              <p className="venc">
+                Venda: {formatarDataBR(f.dataTransacao)}
+                {f.dataLiquidacao && ` — disponível para resgate a partir de ${formatarDataBR(f.dataLiquidacao)}`}
+                {' — '}desconto {formatarMoeda(f.desconto)} (líquido {formatarMoeda(f.valorLiquido)})
+              </p>
+            </div>
+            <p className="valor-conta">{formatarMoeda(f.valorBruto)}</p>
+          </div>
+        ))}
+        {selecionados.length > 0 && (
+          <div className="acoes" style={{ marginTop: 10, flexWrap: 'wrap', gap: 10 }}>
+            <span>
+              {selecionados.length} selecionada(s) — Bruto {formatarMoeda(somaBruto)} − Desconto {formatarMoeda(somaDesconto)} = <strong>Líquido {formatarMoeda(somaLiquido)}</strong>
+            </span>
+            <input type="date" value={dataResgateForm} onChange={(e) => setDataResgateForm(e.target.value)} />
+            <button onClick={lancarResgateCashBarber} className="btn-pagar">Lançar Resgate na Conta Corrente</button>
+            <button onClick={() => setSelecionadosResgate(new Set())} className="btn-cancelar">Limpar Seleção</button>
+          </div>
+        )}
+        </>
+        )}
+      </div>
+    );
+  };
+
   const renderRecebimentosDinheiro = () => {
     const visiveis = ordenarPorDataHora((resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id)));
     if (visiveis.length === 0) return null;
@@ -1463,6 +1604,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       {renderUpload('extrato')}
       {renderUpload('sistema')}
       {renderUpload('assinaturas')}
+      {renderUpload('financeiro')}
       {renderUpload('maquininha')}
       {renderUpload('vendas')}
 
@@ -1522,6 +1664,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           </div>
 
           {renderFaturamentoBruto()}
+
+          {renderAguardandoResgateCashBarber()}
 
           {renderRecebimentosDinheiro()}
 
