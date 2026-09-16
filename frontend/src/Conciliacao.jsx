@@ -112,7 +112,14 @@ function foiLancadoAntes(candidatos, descricaoOriginal, valor) {
   return candidatos.some((c) => Math.abs(c.valor - valor) < 0.01 && c.normalizado.startsWith(alvo));
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto }) {
+// Chave estável (descrição + valor) pra marcar um lançamento do Sistema como
+// "Pagamento Não Identificado" e reconhecer ele de novo em conciliações
+// futuras — o id é recriado do zero a cada upload, não dá pra usar ele.
+function chaveNaoIdentificado(l) {
+  return `${l.descricao}|${l.valorBruto.toFixed(2)}`;
+}
+
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -695,7 +702,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
-    const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id));
+    const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
+    const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id) && !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)));
     const semDuplicatas = todasVisiveis.filter((l) => !l.possivelDuplicata);
     const duplicatas = todasVisiveis.filter((l) => l.possivelDuplicata);
     const visiveisNaOrdem = apenasConfirmadas ? semDuplicatas.filter((l) => l.confirmadoNoBanco) : semDuplicatas;
@@ -1244,7 +1252,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderFaturamentoBruto = () => {
-    const visiveis = ordenarPorDataHora((resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id)));
+    const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
+    const visiveis = ordenarPorDataHora(
+      (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id) && !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)))
+    );
     if (visiveis.length === 0) return null;
     const totalBruto = visiveis.reduce((s, l) => s + l.valorBruto, 0);
     const totalTaxa = visiveis.reduce((s, l) => s + (l.taxa || 0), 0);
@@ -1344,6 +1355,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                       ? 'Cancelar Casamento'
                       : 'Casar com Maquininha (Cartão)'}
                   </button>
+                  <button onClick={() => onMarcarNaoIdentificado(l)} className="btn-editar">Pagamento Não Identificado</button>
                 </>
               )}
               <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
@@ -1426,6 +1438,27 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         <p>Envie o extrato do banco e, se tiver, o relatório do sistema e/ou da maquininha. O app tenta casar os lançamentos automaticamente e mostra o que não bateu.</p>
         <p className="upload-dica">Nos lançamentos do extrato sem correspondência, use "Lançar na Conta Corrente" pra registrar de verdade no app (atualiza o saldo do Sicredi) — é como o app fica sabendo de dinheiro que entrou ou saiu e ele ainda não tinha registrado.</p>
       </div>
+
+      {(pagamentosNaoIdentificados || []).length > 0 && (
+        <div className="card">
+          <h3>Pagamentos Não Identificados</h3>
+          <p className="nota-formato">
+            Lançamentos do Sistema que você marcou como "Pagamento Não Identificado" — ficam fora do Faturamento Bruto (não contam como Receita) até você descobrir o que aconteceu e remover da lista, ou lançar manualmente pela Visão Geral.
+          </p>
+          {ordenarPorDataHora(pagamentosNaoIdentificados).map((p) => (
+            <div key={p.chave} className="item-conta divergencia-item">
+              <div className="info-conta">
+                <p className="desc">{p.descricao}</p>
+                <p className="venc">{formatarDataBR(p.data)}</p>
+              </div>
+              <p className="valor-conta">{formatarMoeda(p.valor)}</p>
+              <div className="acoes">
+                <button onClick={() => onRemoverNaoIdentificado(p.chave)} className="btn-editar">Já identifiquei — remover da lista</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {renderUpload('extrato')}
       {renderUpload('sistema')}

@@ -138,6 +138,7 @@ export default function App() {
   const [dadosEmpresa, setDadosEmpresa] = useState(DADOS_EMPRESA_VAZIO);
   const [faturamentoManual, setFaturamentoManual] = useState([]);
   const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0, percentualCrescimento: 0 });
+  const [pagamentosNaoIdentificados, setPagamentosNaoIdentificados] = useState([]);
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -171,7 +172,8 @@ export default function App() {
         supabase.from('categorias_contabeis').select('*'),
         supabase.from('dados_empresa').select('*').single(),
         supabase.from('faturamento_manual').select('*'),
-        supabase.from('parametros_projecao').select('*').single()
+        supabase.from('parametros_projecao').select('*').single(),
+        supabase.from('pagamentos_nao_identificados').select('*')
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -187,7 +189,8 @@ export default function App() {
         { data: categoriasData },
         { data: dadosEmpresaData },
         { data: faturamentoManualData },
-        { data: projecaoParametrosData }
+        { data: projecaoParametrosData },
+        { data: pagamentosNaoIdentificadosData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -222,6 +225,7 @@ export default function App() {
           percentualCrescimento: parseFloat(projecaoParametrosData.percentual_crescimento) || 0
         });
       }
+      if (pagamentosNaoIdentificadosData) setPagamentosNaoIdentificados(pagamentosNaoIdentificadosData);
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
@@ -1276,6 +1280,48 @@ export default function App() {
     }
   };
 
+  // "Pagamento Não Identificado" na Conciliação: um lançamento do Sistema
+  // que ela não conseguiu explicar como foi pago fica de lado (não conta
+  // como Faturamento Bruto) até ela descobrir e remover da lista. A chave
+  // (descrição + valor) precisa ser estável entre uma conciliação e outra,
+  // já que o id é recriado do zero a cada upload dos relatórios.
+  const handleMarcarNaoIdentificado = async (item) => {
+    const chave = `${item.descricao}|${item.valorBruto.toFixed(2)}`;
+    if (pagamentosNaoIdentificados.some((p) => p.chave === chave)) return;
+    const novoRegistro = { id: Date.now(), chave, descricao: item.descricao, valor: item.valorBruto, data: item.data };
+    setPagamentosNaoIdentificados([...pagamentosNaoIdentificados, novoRegistro]);
+    try {
+      const resultado = await supabase.from('pagamentos_nao_identificados').upsert([novoRegistro]);
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao marcar pagamento como não identificado:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar essa marcação no banco de dados!\n\n' +
+        'O lançamento saiu da lista de pendências na tela, mas isso ainda NÃO foi salvo de verdade — ' +
+        'ao recarregar a página ele volta a aparecer.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
+        'database/migracao_pagamentos_nao_identificados.sql no SQL Editor do Supabase uma vez, depois repita aqui.'
+      );
+    }
+  };
+
+  const handleRemoverNaoIdentificado = async (chave) => {
+    const registro = pagamentosNaoIdentificados.find((p) => p.chave === chave);
+    setPagamentosNaoIdentificados(pagamentosNaoIdentificados.filter((p) => p.chave !== chave));
+    if (!registro) return;
+    try {
+      const resultado = await supabase.from('pagamentos_nao_identificados').delete().eq('id', registro.id);
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao remover pagamento não identificado:', erro);
+      alert(
+        'ATENÇÃO: não consegui remover essa marcação no banco de dados!\n\n' +
+        'Motivo: ' + erro.message
+      );
+    }
+  };
+
   const handleAdicionarCategoria = (nivel1, nivel2) => {
     if (!nivel1.trim() || !nivel2.trim()) return;
     const nivel1Formatado = capitalizarTexto(nivel1.trim());
@@ -2296,6 +2342,9 @@ export default function App() {
               onLancarCaixa={handleLancarCaixa}
               onCriarContaTaxaMaquininha={handleCriarContaTaxaMaquininha}
               onCriarContasTaxaMaquininhaPorDia={handleCriarContasTaxaMaquininhaPorDia}
+              pagamentosNaoIdentificados={pagamentosNaoIdentificados}
+              onMarcarNaoIdentificado={handleMarcarNaoIdentificado}
+              onRemoverNaoIdentificado={handleRemoverNaoIdentificado}
             />
           </div>
 

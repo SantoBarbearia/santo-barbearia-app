@@ -140,6 +140,18 @@ CREATE TABLE IF NOT EXISTS parametros_projecao (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Pagamentos Não Identificados (Conciliação) — lançamento do
+-- Sistema que a Fernanda não conseguiu identificar como foi pago; fica de
+-- lado, sem entrar no Faturamento Bruto, até ela descobrir e remover da lista.
+CREATE TABLE IF NOT EXISTS pagamentos_nao_identificados (
+  id BIGINT PRIMARY KEY,
+  chave VARCHAR(255) NOT NULL UNIQUE,
+  descricao VARCHAR(255) NOT NULL,
+  valor DECIMAL(10, 2) NOT NULL,
+  data DATE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
 -- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
 -- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
@@ -155,6 +167,7 @@ ALTER TABLE categorias_contabeis ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dados_empresa ENABLE ROW LEVEL SECURITY;
 ALTER TABLE faturamento_manual ENABLE ROW LEVEL SECURITY;
 ALTER TABLE parametros_projecao ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pagamentos_nao_identificados ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
@@ -166,6 +179,7 @@ CREATE POLICY "Acesso total" ON categorias_contabeis FOR ALL USING (true) WITH C
 CREATE POLICY "Acesso total" ON dados_empresa FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON faturamento_manual FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON parametros_projecao FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON pagamentos_nao_identificados FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
 INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 
