@@ -134,7 +134,16 @@ function normalizarNome(nome) {
     .trim();
 }
 
-export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado, resgatesCashBarberLancados, onLancarResgateCashBarber }) {
+// Chave cliente+valor pra reconhecer, de fora da conciliação atual, que uma
+// comanda do Faturamento Bruto do Sistema já é conhecida como assinatura
+// cobrada pelo Cash Barber (pendente de resgate ou já resgatada) — usada pra
+// excluir ela do Faturamento Bruto sem depender de reenviar o Relatório de
+// Transações Financeiras em toda conciliação.
+function chaveClienteValor(cliente, valor) {
+  return `${normalizarNome(cliente)}|${(valor || 0).toFixed(2)}`;
+}
+
+export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado, resgatesCashBarberPendentes, onRegistrarPendentesResgate, resgatesCashBarberLancados, onLancarResgateCashBarber }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
     sistema: { ...FONTE_VAZIA },
@@ -158,6 +167,30 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [ocultarDuplicatas, setOcultarDuplicatas] = useState(false);
   const [secoesRecolhidas, setSecoesRecolhidas] = useState(new Set());
   const [depositosExpandidos, setDepositosExpandidos] = useState(new Set());
+
+  // Lista persistida (sobrevive a reload/reconciliação sem reenviar o
+  // Relatório de Transações Financeiras) em formato camelCase, igual o resto
+  // do app usa — o Supabase devolve as colunas em snake_case.
+  const resgatesPendentesCamel = (resgatesCashBarberPendentes || []).map((r) => ({
+    id: r.transacao_id,
+    transacaoId: r.transacao_id,
+    cliente: r.cliente,
+    descricao: r.descricao,
+    valorBruto: parseFloat(r.valor_bruto) || 0,
+    valorLiquido: parseFloat(r.valor_liquido) || 0,
+    desconto: parseFloat(r.desconto) || 0,
+    dataTransacao: r.data_transacao,
+    dataLiquidacao: r.data_liquidacao,
+    casada: !!r.casada
+  }));
+  // Toda comanda (pendente de resgate OU já resgatada) que sabemos ser uma
+  // assinatura cobrada pelo Cash Barber — sai do Faturamento Bruto do
+  // Sistema pra sempre, mesmo sem o Relatório de Transações Financeiras
+  // carregado nesta conciliação (ver chaveClienteValor).
+  const chavesResgateConhecidas = new Set([
+    ...resgatesPendentesCamel.map((r) => chaveClienteValor(r.cliente, r.valorBruto)),
+    ...(resgatesCashBarberLancados || []).map((r) => chaveClienteValor(r.cliente, parseFloat(r.valor_bruto) || 0))
+  ]);
   const alternarDeposito = (id) => {
     setDepositosExpandidos((s) => {
       const novo = new Set(s);
@@ -509,50 +542,43 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       passo4.pares.filter((p) => p.a.ordemPagamento !== undefined && p.a.ordemPagamento !== null).map((p) => [p.b.id, p.a.ordemPagamento])
     );
 
+    const faturamentoBrutoComStatus = faturamentoBrutoSistema.map((l) => ({
+      ...l,
+      // Sem forma de pagamento conhecida (Assinatura do Relatório de Dados),
+      // nunca dá pra confirmar sozinho — precisa sempre de conferência manual.
+      confirmadoNoBanco: l.formaPagamentoDesconhecida ? false : (l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)),
+      dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
+      ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
+      ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
+      possivelDuplicata: foiLancadoAntes(creditosManuaisSicredi, l.descricao, l.valorBruto)
+    }));
+
     // Assinatura que o Cash Barber cobra direto no cartão do cliente (o
     // Relatório de Transações Financeiras): casa por cliente + valor bruto
-    // com uma Assinatura pendente (formaPagamentoDesconhecida). Quando bate,
-    // essa comanda sai do Faturamento Bruto do Sistema — não é mais "forma
-    // de pagamento a descobrir", já sabemos que veio por aí — e passa a
-    // aparecer só no card "Aguardando Resgate do Cash Barber", onde só vira
-    // Receita de verdade quando ela lançar o resgate manualmente.
-    const financeiroDisponivel = [...fontes.financeiro.linhas];
+    // com uma Assinatura pendente (formaPagamentoDesconhecida), só pra saber
+    // se achamos a correspondência (flag "casada", informativo) antes de
+    // persistir. A exclusão dessas comandas do Faturamento Bruto do Sistema
+    // NÃO usa esse casamento de agora — usa a lista PERSISTIDA
+    // (resgatesCashBarberPendentes/Lancados, ver mais abaixo), senão a
+    // comanda voltaria a aparecer toda vez que ela reconciliar sem reenviar
+    // o Relatório de Transações Financeiras de novo.
     const usadosFinanceiro = new Set();
-    const resgatePorSistemaId = new Map();
     fontes.assinaturas.linhas.forEach((l) => {
       const nomeAlvo = normalizarNome(l.cliente);
-      const candidato = financeiroDisponivel.find((f) =>
+      const candidato = fontes.financeiro.linhas.find((f) =>
         !usadosFinanceiro.has(f.id) &&
         normalizarNome(f.cliente) === nomeAlvo &&
         Math.abs(f.valorBruto - l.valorBruto) < 0.01
       );
-      if (candidato) {
-        usadosFinanceiro.add(candidato.id);
-        resgatePorSistemaId.set(l.id, candidato);
-      }
+      if (candidato) usadosFinanceiro.add(candidato.id);
     });
-
-    const faturamentoBrutoComStatus = faturamentoBrutoSistema
-      .filter((l) => !resgatePorSistemaId.has(l.id))
-      .map((l) => ({
-        ...l,
-        // Sem forma de pagamento conhecida (Assinatura do Relatório de Dados),
-        // nunca dá pra confirmar sozinho — precisa sempre de conferência manual.
-        confirmadoNoBanco: l.formaPagamentoDesconhecida ? false : (l.viaPix ? pixConfirmadoIds.has(l.id) : (l.viaCartao ? cartaoConfirmadoIds.has(l.id) : true)),
-        dataPagamento: l.viaCartao ? (dataPagamentoPorSistemaId.get(l.id) ?? null) : null,
-        ordemExtrato: l.viaPix ? (ordemExtratoPorSistemaId.get(l.id) ?? null) : null,
-        ordemPagamento: l.viaCartao ? (ordemPagamentoPorSistemaId.get(l.id) ?? null) : null,
-        possivelDuplicata: foiLancadoAntes(creditosManuaisSicredi, l.descricao, l.valorBruto)
-      }));
-
-    // Lista do card "Aguardando Resgate do Cash Barber" — todas as transações
-    // do relatório financeiro (o próprio card filtra, ao exibir, as que já
-    // foram incluídas num resgate lançado — igual "Pagamento Não
-    // Identificado" já faz, pra sumir na hora, sem precisar reconciliar de
-    // novo). "casada" só indica se achamos a Assinatura correspondente no
-    // Sistema (informativo).
-    const aguardandoResgateCashBarber = fontes.financeiro.linhas
-      .map((f) => ({ ...f, casada: usadosFinanceiro.has(f.id) }));
+    // Transações do relatório financeiro carregado agora — persistidas (ver
+    // onRegistrarPendentesResgate mais abaixo) pra não depender de reenviar
+    // esse relatório em toda conciliação futura.
+    const aguardandoResgateNovos = fontes.financeiro.linhas.map((f) => ({ ...f, casada: usadosFinanceiro.has(f.id) }));
+    if (aguardandoResgateNovos.length > 0 && onRegistrarPendentesResgate) {
+      onRegistrarPendentesResgate(aguardandoResgateNovos);
+    }
 
     // Elo que faltava na cadeia do cartão: hoje o Sistema bate com Vendas
     // (passo4, por valor+data) e o Extrato bate com Pagamentos agrupado por
@@ -632,7 +658,6 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       taxaMaquininhaPorDia,
       recebimentosDinheiro,
       faturamentoBrutoSistema: faturamentoBrutoComStatus,
-      aguardandoResgateCashBarber,
       paresPixExtratoSistema,
       // Mesma ideia do paresPixExtratoSistema, só que pro cartão: qual venda
       // da maquininha foi casada automaticamente com qual comanda — pra
@@ -761,7 +786,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
 
   const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
     const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
-    const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id) && !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)));
+    const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) =>
+      !ignorados.has(l.id) &&
+      !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)) &&
+      !chavesResgateConhecidas.has(chaveClienteValor(l.cliente, l.valorBruto))
+    );
     const semDuplicatas = todasVisiveis.filter((l) => !l.possivelDuplicata);
     const duplicatas = todasVisiveis.filter((l) => l.possivelDuplicata);
     const visiveisNaOrdem = apenasConfirmadas ? semDuplicatas.filter((l) => l.confirmadoNoBanco) : semDuplicatas;
@@ -832,10 +861,39 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // dia em que o Pix do resgate realmente caiu no Sicredi), não a de
   // liquidação — essa é só informativa (ver nota em parseTransacoesFinanceiras).
   const lancarResgateCashBarber = () => {
-    const itens = (resultado.aguardandoResgateCashBarber || []).filter((f) => selecionadosResgate.has(f.id));
+    const itens = resgatesPendentesCamel.filter((f) => selecionadosResgate.has(f.id));
     if (itens.length === 0 || !dataResgateForm) return;
     onLancarResgateCashBarber(itens, dataResgateForm);
     setSelecionadosResgate(new Set());
+  };
+
+  // "Já identifiquei" um Pagamento Não Identificado: tira a marcação (some da
+  // lista de mistérios) e devolve o lançamento pro Faturamento Bruto do
+  // Sistema, como uma pendência normal (com os botões de Casar/Lançar) — sem
+  // isso ele simplesmente sumiria, sem chance de virar Receita de verdade.
+  // Só é possível quando o registro guarda os dados completos (marcados
+  // depois dessa correção) e quando já rodou "Conciliar" nesta sessão (é o
+  // Faturamento Bruto do Sistema que recebe o item de volta).
+  const handleJaIdentifiquei = (p) => {
+    onRemoverNaoIdentificado(p.chave);
+    if (!p.dados_completos) {
+      alert(
+        `Removido da lista. Como esse lançamento foi marcado antes dessa atualização, não guardamos os dados completos dele — ` +
+        `pra casar/lançar, reenvie o relatório do Sistema que contém "${p.descricao}" e clique em "Conciliar" de novo.`
+      );
+      return;
+    }
+    if (!resultado) {
+      alert('Removido da lista. Pra esse lançamento aparecer no Faturamento Bruto do Sistema pra você casar/lançar, suba pelo menos o extrato e clique em "Conciliar" — ele volta a aparecer automaticamente.');
+      return;
+    }
+    setResultado((r) => ({
+      ...r,
+      faturamentoBrutoSistema: [
+        ...r.faturamentoBrutoSistema.filter((x) => x.id !== p.dados_completos.id),
+        { ...p.dados_completos, confirmadoNoBanco: false, possivelDuplicata: false }
+      ]
+    }));
   };
 
   // Às vezes o cliente faz um pagamento só (um Pix, por exemplo) que no Cash
@@ -1333,7 +1391,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const renderFaturamentoBruto = () => {
     const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
     const visiveis = ordenarPorDataHora(
-      (resultado.faturamentoBrutoSistema || []).filter((l) => !ignorados.has(l.id) && !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)))
+      (resultado.faturamentoBrutoSistema || []).filter((l) =>
+        !ignorados.has(l.id) &&
+        !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)) &&
+        !chavesResgateConhecidas.has(chaveClienteValor(l.cliente, l.valorBruto))
+      )
     );
     if (visiveis.length === 0) return null;
     const totalBruto = visiveis.reduce((s, l) => s + l.valorBruto, 0);
@@ -1477,7 +1539,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const renderAguardandoResgateCashBarber = () => {
     const idsJaLancados = new Set((resgatesCashBarberLancados || []).map((r) => r.transacao_id));
     const visiveis = ordenarPorDataHora(
-      (resultado.aguardandoResgateCashBarber || []).filter((f) => !idsJaLancados.has(f.transacaoId))
+      resgatesPendentesCamel.filter((f) => !idsJaLancados.has(f.transacaoId))
     );
     if (visiveis.length === 0) return null;
     const selecionados = visiveis.filter((f) => selecionadosResgate.has(f.id));
@@ -1594,12 +1656,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               </div>
               <p className="valor-conta">{formatarMoeda(p.valor)}</p>
               <div className="acoes">
-                <button onClick={() => onRemoverNaoIdentificado(p.chave)} className="btn-editar">Já identifiquei — remover da lista</button>
+                <button onClick={() => handleJaIdentifiquei(p)} className="btn-editar">Já identifiquei — remover da lista</button>
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {renderAguardandoResgateCashBarber()}
 
       {renderUpload('extrato')}
       {renderUpload('sistema')}
@@ -1664,8 +1728,6 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
           </div>
 
           {renderFaturamentoBruto()}
-
-          {renderAguardandoResgateCashBarber()}
 
           {renderRecebimentosDinheiro()}
 

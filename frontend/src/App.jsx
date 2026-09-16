@@ -139,6 +139,7 @@ export default function App() {
   const [faturamentoManual, setFaturamentoManual] = useState([]);
   const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0, percentualCrescimento: 0 });
   const [pagamentosNaoIdentificados, setPagamentosNaoIdentificados] = useState([]);
+  const [resgatesCashBarberPendentes, setResgatesCashBarberPendentes] = useState([]);
   const [resgatesCashBarberLancados, setResgatesCashBarberLancados] = useState([]);
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
@@ -175,6 +176,7 @@ export default function App() {
         supabase.from('faturamento_manual').select('*'),
         supabase.from('parametros_projecao').select('*').single(),
         supabase.from('pagamentos_nao_identificados').select('*'),
+        supabase.from('resgates_cashbarber_pendentes').select('*'),
         supabase.from('resgates_cashbarber_lancados').select('*')
       ]);
       const semResposta = new Promise((_, reject) =>
@@ -193,6 +195,7 @@ export default function App() {
         { data: faturamentoManualData },
         { data: projecaoParametrosData },
         { data: pagamentosNaoIdentificadosData },
+        { data: resgatesCashBarberPendentesData },
         { data: resgatesCashBarberLancadosData }
       ] = await Promise.race([buscarDados, semResposta]);
 
@@ -229,6 +232,7 @@ export default function App() {
         });
       }
       if (pagamentosNaoIdentificadosData) setPagamentosNaoIdentificados(pagamentosNaoIdentificadosData);
+      if (resgatesCashBarberPendentesData) setResgatesCashBarberPendentes(resgatesCashBarberPendentesData);
       if (resgatesCashBarberLancadosData) setResgatesCashBarberLancados(resgatesCashBarberLancadosData);
 
     } catch (erro) {
@@ -1292,7 +1296,10 @@ export default function App() {
   const handleMarcarNaoIdentificado = async (item) => {
     const chave = `${item.descricao}|${item.valorBruto.toFixed(2)}`;
     if (pagamentosNaoIdentificados.some((p) => p.chave === chave)) return;
-    const novoRegistro = { id: Date.now(), chave, descricao: item.descricao, valor: item.valorBruto, data: item.data };
+    // dados_completos guarda o lançamento inteiro (não só descrição/valor/data)
+    // pra dar pra devolver ele pro Faturamento Bruto do Sistema, pronto pra
+    // casar/lançar, quando ela descobrir a forma de pagamento e remover da lista.
+    const novoRegistro = { id: Date.now(), chave, descricao: item.descricao, valor: item.valorBruto, data: item.data, dados_completos: item };
     setPagamentosNaoIdentificados([...pagamentosNaoIdentificados, novoRegistro]);
     try {
       const resultado = await supabase.from('pagamentos_nao_identificados').upsert([novoRegistro]);
@@ -1304,8 +1311,9 @@ export default function App() {
         'O lançamento saiu da lista de pendências na tela, mas isso ainda NÃO foi salvo de verdade — ' +
         'ao recarregar a página ele volta a aparecer.\n\n' +
         'Motivo: ' + erro.message + '\n\n' +
-        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
-        'database/migracao_pagamentos_nao_identificados.sql no SQL Editor do Supabase uma vez, depois repita aqui.'
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar os scripts ' +
+        'database/migracao_pagamentos_nao_identificados.sql e database/migracao_resgates_cashbarber_pendentes.sql ' +
+        'no SQL Editor do Supabase uma vez, depois repita aqui.'
       );
     }
   };
@@ -1562,17 +1570,63 @@ export default function App() {
       data_resgate: dataResgate
     }));
     setResgatesCashBarberLancados((r) => [...r, ...novosRegistros]);
+    // Tira dos pendentes — já foi resolvido, não precisa mais ficar
+    // "aguardando resgate" (o card já filtra pelos lançados mesmo, mas
+    // limpar evita a tabela de pendentes crescer pra sempre).
+    const idsLancados = new Set(itens.map((i) => i.transacaoId));
+    setResgatesCashBarberPendentes((r) => r.filter((p) => !idsLancados.has(p.transacao_id)));
     try {
-      const resultado = await supabase.from('resgates_cashbarber_lancados').upsert(novosRegistros, { onConflict: 'transacao_id' });
-      if (resultado.error) throw new Error(resultado.error.message);
+      const [resultadoLancados, resultadoPendentes] = await Promise.all([
+        supabase.from('resgates_cashbarber_lancados').upsert(novosRegistros, { onConflict: 'transacao_id' }),
+        supabase.from('resgates_cashbarber_pendentes').delete().in('transacao_id', [...idsLancados])
+      ]);
+      if (resultadoLancados.error) throw new Error(resultadoLancados.error.message);
+      if (resultadoPendentes.error) throw new Error(resultadoPendentes.error.message);
     } catch (erro) {
       console.error('Erro ao salvar resgate Cash Barber:', erro);
       alert(
         'ATENÇÃO: o lançamento na Conta Corrente foi feito, mas não consegui salvar o registro do resgate no banco de dados!\n\n' +
-        'Isso significa que, ao recarregar a página ou reenviar o mesmo Relatório de Transações Financeiras numa próxima conciliação, essas assinaturas podem voltar a aparecer em "Aguardando Resgate" — se isso acontecer, NÃO lance de novo (a Receita já foi lançada agora), só ignore.\n\n' +
+        'Isso significa que, ao recarregar a página, essas assinaturas podem voltar a aparecer em "Aguardando Resgate" — se isso acontecer, NÃO lance de novo (a Receita já foi lançada agora), só ignore.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar os scripts ' +
+        'database/migracao_resgates_cashbarber.sql e database/migracao_resgates_cashbarber_pendentes.sql no SQL Editor do Supabase uma vez.'
+      );
+    }
+  };
+
+  // Assim que um relatório de Transações Financeiras é conciliado, guarda
+  // (upsert) cada transação numa tabela persistida — sem isso, o card
+  // "Aguardando Resgate do Cash Barber" dependia só do relatório carregado
+  // NAQUELA sessão e sumia ao recarregar a página, igual ela reportou.
+  const handleRegistrarPendentesResgate = async (itens) => {
+    if (!itens || itens.length === 0) return;
+    const registros = itens.map((i) => ({
+      transacao_id: i.transacaoId,
+      cliente: i.cliente,
+      descricao: i.descricao,
+      valor_bruto: i.valorBruto,
+      valor_liquido: i.valorLiquido,
+      desconto: i.desconto,
+      data_transacao: i.dataTransacao,
+      data_liquidacao: i.dataLiquidacao,
+      casada: i.casada
+    }));
+    setResgatesCashBarberPendentes((r) => {
+      const porId = new Map(r.map((x) => [x.transacao_id, x]));
+      registros.forEach((reg) => porId.set(reg.transacao_id, reg));
+      return [...porId.values()];
+    });
+    try {
+      const resultado = await supabase.from('resgates_cashbarber_pendentes').upsert(registros, { onConflict: 'transacao_id' });
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao salvar pendências de resgate Cash Barber:', erro);
+      alert(
+        'ATENÇÃO: não consegui salvar essas transações do Cash Barber no banco de dados!\n\n' +
+        'Elas estão aparecendo em "Aguardando Resgate do Cash Barber" agora, mas podem sumir se você recarregar a página antes de conseguir salvar de novo (reenviando o relatório e reconciliando).\n\n' +
         'Motivo: ' + erro.message + '\n\n' +
         'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
-        'database/migracao_resgates_cashbarber.sql no SQL Editor do Supabase uma vez.'
+        'database/migracao_resgates_cashbarber_pendentes.sql no SQL Editor do Supabase uma vez.'
       );
     }
   };
@@ -2426,6 +2480,8 @@ export default function App() {
               pagamentosNaoIdentificados={pagamentosNaoIdentificados}
               onMarcarNaoIdentificado={handleMarcarNaoIdentificado}
               onRemoverNaoIdentificado={handleRemoverNaoIdentificado}
+              resgatesCashBarberPendentes={resgatesCashBarberPendentes}
+              onRegistrarPendentesResgate={handleRegistrarPendentesResgate}
               resgatesCashBarberLancados={resgatesCashBarberLancados}
               onLancarResgateCashBarber={handleLancarResgateCashBarber}
             />
