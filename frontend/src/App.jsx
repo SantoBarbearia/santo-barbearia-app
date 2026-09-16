@@ -139,6 +139,7 @@ export default function App() {
   const [faturamentoManual, setFaturamentoManual] = useState([]);
   const [projecaoParametros, setProjecaoParametros] = useState({ dataAumento: '', percentualAumento: 0, percentualCrescimento: 0 });
   const [pagamentosNaoIdentificados, setPagamentosNaoIdentificados] = useState([]);
+  const [resgatesCashBarberLancados, setResgatesCashBarberLancados] = useState([]);
   const [editandoMovimentacaoId, setEditandoMovimentacaoId] = useState(null);
   const [movimentacaoEditando, setMovimentacaoEditando] = useState({ data: '', descricao: '', valor: '', categoria: '', conta: 'caixa' });
 
@@ -173,7 +174,8 @@ export default function App() {
         supabase.from('dados_empresa').select('*').single(),
         supabase.from('faturamento_manual').select('*'),
         supabase.from('parametros_projecao').select('*').single(),
-        supabase.from('pagamentos_nao_identificados').select('*')
+        supabase.from('pagamentos_nao_identificados').select('*'),
+        supabase.from('resgates_cashbarber_lancados').select('*')
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -190,7 +192,8 @@ export default function App() {
         { data: dadosEmpresaData },
         { data: faturamentoManualData },
         { data: projecaoParametrosData },
-        { data: pagamentosNaoIdentificadosData }
+        { data: pagamentosNaoIdentificadosData },
+        { data: resgatesCashBarberLancadosData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -226,6 +229,7 @@ export default function App() {
         });
       }
       if (pagamentosNaoIdentificadosData) setPagamentosNaoIdentificados(pagamentosNaoIdentificadosData);
+      if (resgatesCashBarberLancadosData) setResgatesCashBarberLancados(resgatesCashBarberLancadosData);
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
@@ -1496,6 +1500,83 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
+  // Lança na Conta Corrente o resgate de um lote de assinaturas cobradas pelo
+  // próprio Cash Barber (Conciliação > "Aguardando Resgate do Cash Barber").
+  // A soma BRUTO de todas as selecionadas vira uma Receita só, e a soma dos
+  // descontos (a taxa que o Cash Barber já embute) vira uma Despesa separada
+  // — igual o Faturamento Bruto do Sistema já faz com a taxa da maquininha.
+  // A data usada é a que ela escolheu (quando o Pix do resgate realmente caiu
+  // no banco), nunca a "Data de liquidação" do relatório (essa só marca
+  // quando o valor ficou disponível pra pedir, não quando entrou de verdade).
+  // Guarda também o id de cada transação num registro à parte (dedicado, não
+  // no salvarDados geral) pra elas não voltarem a aparecer como pendentes
+  // numa conciliação futura, mesmo depois de reenviar o mesmo relatório.
+  const handleLancarResgateCashBarber = async (itens, dataResgate) => {
+    if (!itens || itens.length === 0 || !dataResgate) return;
+    const baseId = Date.now();
+    const [ano, mes, dia] = dataResgate.split('-');
+    const dataBR = `${dia}/${mes}/${ano}`;
+    const totalBruto = Math.round(itens.reduce((s, i) => s + i.valorBruto, 0) * 100) / 100;
+    const totalDesconto = Math.round(itens.reduce((s, i) => s + i.desconto, 0) * 100) / 100;
+    const descricaoBase = itens.length === 1
+      ? `Resgate Cash Barber - ${itens[0].cliente}`
+      : `Resgate Cash Barber (${itens.length} assinaturas)`;
+
+    const novasMovs = [{
+      id: baseId,
+      data: dataBR,
+      tipo: 'Crédito Manual',
+      descricao: `${capitalizarTexto(descricaoBase)} (lançado da Conciliação)`,
+      valor: totalBruto,
+      conta: 'sicredi',
+      categoria: 'Receitas > Produtos e Serviços'
+    }];
+    let delta = totalBruto;
+    if (totalDesconto > 0) {
+      novasMovs.push({
+        id: baseId + 1,
+        data: dataBR,
+        tipo: 'Débito Manual',
+        descricao: `Taxa Cash Barber - ${capitalizarTexto(descricaoBase)} (lançado da Conciliação)`,
+        valor: totalDesconto,
+        conta: 'sicredi',
+        categoria: 'Assinaturas e Sistemas > Assinaturas e Sistemas'
+      });
+      delta -= totalDesconto;
+    }
+
+    const novasContas = { ...contas, sicredi: contas.sicredi + delta };
+    const novasMovimentacoes = [...movimentacoes, ...novasMovs];
+    setContas(novasContas);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
+
+    const novosRegistros = itens.map((i) => ({
+      transacao_id: i.transacaoId,
+      cliente: i.cliente,
+      valor_bruto: i.valorBruto,
+      valor_desconto: i.desconto,
+      valor_liquido: i.valorLiquido,
+      data_transacao: i.dataTransacao,
+      data_liquidacao: i.dataLiquidacao,
+      data_resgate: dataResgate
+    }));
+    setResgatesCashBarberLancados((r) => [...r, ...novosRegistros]);
+    try {
+      const resultado = await supabase.from('resgates_cashbarber_lancados').upsert(novosRegistros, { onConflict: 'transacao_id' });
+      if (resultado.error) throw new Error(resultado.error.message);
+    } catch (erro) {
+      console.error('Erro ao salvar resgate Cash Barber:', erro);
+      alert(
+        'ATENÇÃO: o lançamento na Conta Corrente foi feito, mas não consegui salvar o registro do resgate no banco de dados!\n\n' +
+        'Isso significa que, ao recarregar a página ou reenviar o mesmo Relatório de Transações Financeiras numa próxima conciliação, essas assinaturas podem voltar a aparecer em "Aguardando Resgate" — se isso acontecer, NÃO lance de novo (a Receita já foi lançada agora), só ignore.\n\n' +
+        'Motivo: ' + erro.message + '\n\n' +
+        'Se a mensagem falar em tabela ou coluna que não existe, você precisa rodar o script ' +
+        'database/migracao_resgates_cashbarber.sql no SQL Editor do Supabase uma vez.'
+      );
+    }
+  };
+
   // A taxa da maquininha não é uma conta que fica em aberto esperando
   // pagamento — ela já é descontada pela própria maquininha antes do
   // dinheiro cair na Conta Corrente (o que chega no banco já é o valor
@@ -2345,6 +2426,8 @@ export default function App() {
               pagamentosNaoIdentificados={pagamentosNaoIdentificados}
               onMarcarNaoIdentificado={handleMarcarNaoIdentificado}
               onRemoverNaoIdentificado={handleRemoverNaoIdentificado}
+              resgatesCashBarberLancados={resgatesCashBarberLancados}
+              onLancarResgateCashBarber={handleLancarResgateCashBarber}
             />
           </div>
 

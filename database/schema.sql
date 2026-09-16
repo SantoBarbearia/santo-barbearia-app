@@ -152,6 +152,23 @@ CREATE TABLE IF NOT EXISTS pagamentos_nao_identificados (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Tabela de Resgates do Cash Barber Lançados (Conciliação) — controla quais
+-- transações do Relatório de Transações Financeiras (assinaturas cobradas
+-- pelo próprio Cash Barber) já foram incluídas num resgate lançado na Conta
+-- Corrente, pra não voltarem a aparecer como pendentes numa conciliação
+-- futura nem correrem o risco de ser lançadas de novo.
+CREATE TABLE IF NOT EXISTS resgates_cashbarber_lancados (
+  transacao_id VARCHAR(255) PRIMARY KEY,
+  cliente VARCHAR(255),
+  valor_bruto DECIMAL(10, 2) NOT NULL,
+  valor_desconto DECIMAL(10, 2) DEFAULT 0,
+  valor_liquido DECIMAL(10, 2),
+  data_transacao DATE,
+  data_liquidacao DATE,
+  data_resgate DATE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
 -- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
 -- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
@@ -168,6 +185,7 @@ ALTER TABLE dados_empresa ENABLE ROW LEVEL SECURITY;
 ALTER TABLE faturamento_manual ENABLE ROW LEVEL SECURITY;
 ALTER TABLE parametros_projecao ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pagamentos_nao_identificados ENABLE ROW LEVEL SECURITY;
+ALTER TABLE resgates_cashbarber_lancados ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
@@ -180,6 +198,7 @@ CREATE POLICY "Acesso total" ON dados_empresa FOR ALL USING (true) WITH CHECK (t
 CREATE POLICY "Acesso total" ON faturamento_manual FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON parametros_projecao FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON pagamentos_nao_identificados FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON resgates_cashbarber_lancados FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
 INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 

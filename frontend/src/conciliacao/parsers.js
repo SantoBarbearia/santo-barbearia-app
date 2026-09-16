@@ -225,6 +225,7 @@ export function detectarFormatoConhecido(linhas) {
   if (primeiraCelula === 'Tipo' && segundaCelula === 'Descrição') return 'balanco-sistema';
   if (primeiraCelula === 'Cliente' && segundaCelula === 'Telefone') return 'sistema-movimentacoes';
   if (primeiraCelula === 'ID da comanda' && segundaCelula === 'Filial') return 'sistema-transacoes';
+  if (primeiraCelula === 'ID' && segundaCelula === 'Descrição') return 'transacoes-financeiras';
 
   // Exportação em XLSX vem com linhas de título ("Relatório de Pagamentos.", período,
   // etc.) antes do cabeçalho; a exportação em CSV às vezes começa direto no cabeçalho.
@@ -613,6 +614,7 @@ export function parseTransacoesSistema(linhas) {
       data,
       dataHora: `${data}T${dataHoraMatch[2]}:00`,
       descricao: `Assinatura ${cliente} - ${dataHoraMatch[1]} ${dataHoraMatch[2]}`,
+      cliente,
       valor,
       valorBruto: valor,
       valorLiquido: valor,
@@ -628,6 +630,74 @@ export function parseTransacoesSistema(linhas) {
   }
 
   return registros;
+}
+
+// Relatório de Transações Financeiras do Cash Barber: assinaturas que o
+// próprio Cash Barber cobra direto no cartão cadastrado do cliente, e repassa
+// pra Fernanda depois. IMPORTANTE: "Data de liquidação" NÃO é uma data de
+// transferência automática — é só o dia em que o valor fica disponível pra
+// ela solicitar o resgate; o resgate em si (Pix) só cai na conta quando ela
+// pede, numa data que esse relatório não tem como prever. Por isso essas
+// transações só viram Receita de verdade quando ela agrupar e lançar o
+// resgate manualmente (ver "Aguardando Resgate do Cash Barber" em
+// Conciliacao.jsx) — nunca automaticamente na data de liquidação.
+// Algumas linhas são estornos: mesmo ID de uma linha anterior, valores
+// negativos, com liquidação no mesmo dia da transação (reversão imediata,
+// sem prazo de repasse). Agrupamos por ID e somamos, descartando o que
+// zerou (estorno total — nada ficou pendente daquele ID).
+export function parseTransacoesFinanceiras(linhas) {
+  const idxCabecalho = encontrarLinhaCabecalho(linhas, 'ID');
+  const inicio = idxCabecalho === -1 ? 1 : idxCabecalho + 1;
+
+  const porId = new Map();
+  for (let i = inicio; i < linhas.length; i++) {
+    const r = linhas[i];
+    const transacaoId = String(r[0] || '').trim();
+    if (!transacaoId) continue;
+    const cliente = String(r[2] || '').trim();
+    if (!cliente) continue;
+    const valorBruto = parseValorBR(r[3]);
+    const valorLiquido = parseValorBR(r[4]);
+    const desconto = parseValorBR(r[5]);
+    if (isNaN(valorBruto) || isNaN(valorLiquido) || isNaN(desconto)) continue;
+    const dataTransacao = paraDataISO(r[7]);
+    if (!dataTransacao) continue;
+    const dataLiquidacao = paraDataISO(r[8]);
+
+    const existente = porId.get(transacaoId);
+    if (existente) {
+      existente.valorBruto += valorBruto;
+      existente.valorLiquido += valorLiquido;
+      existente.desconto += desconto;
+    } else {
+      porId.set(transacaoId, {
+        transacaoId,
+        cliente,
+        descricao: `${cliente} - ${String(r[1] || '').trim()}`,
+        valorBruto,
+        valorLiquido,
+        desconto,
+        dataTransacao,
+        dataLiquidacao
+      });
+    }
+  }
+
+  return [...porId.values()]
+    .filter((r) => r.valorBruto > 0.01)
+    .map((r) => ({
+      id: novoId('fin'),
+      ...r,
+      // "data"/"valor"/"tipo" no formato genérico (data/descrição/tipo/valor)
+      // que a tela de revisão de upload usa pra qualquer fonte — o resto dos
+      // campos (valorBruto, desconto, dataLiquidacao...) é específico daqui.
+      data: r.dataTransacao,
+      valor: Math.round(r.valorBruto * 100) / 100,
+      tipo: 'entrada',
+      valorBruto: Math.round(r.valorBruto * 100) / 100,
+      valorLiquido: Math.round(r.valorLiquido * 100) / 100,
+      desconto: Math.round(r.desconto * 100) / 100
+    }));
 }
 
 // Relatório de Vendas da maquininha Sicredi: cada parcela de uma venda parcelada
