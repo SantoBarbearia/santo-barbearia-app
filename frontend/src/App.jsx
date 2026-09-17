@@ -1154,7 +1154,11 @@ export default function App() {
     salvarDados({ contas: novasContas, contasAPagar, comissoes, movimentacoes: novasMovimentacoes });
   };
 
-  const handleFecharMes = () => {
+  // mesISO vem do seletor "Mês" do Resumo para Contabilidade (ex: ela pode
+  // estar revisando Agosto em Setembro) — usar a data de hoje aqui, em vez do
+  // mês que ela realmente está fechando, rotulava o fechamento com o mês
+  // errado (ex: salvava os números de Agosto no histórico como "Setembro").
+  const handleFecharMes = (mesISO) => {
     const somar = (campo) => BARBEIROS_CHAVES.reduce((soma, b) => soma + (comissoes[b][campo] || 0), 0);
     const totalServicos = somar('servicos');
     const totalProdutos = somar('produtos');
@@ -1166,9 +1170,10 @@ export default function App() {
     const comissaoLiquida = comissaoBruta - totalVale - totalConsumo - totalMei;
 
     const hoje = new Date();
-    const mes = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
     const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-    const mesLabel = `${nomesMeses[hoje.getMonth()]}/${hoje.getFullYear()}`;
+    const mes = mesISO || `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const [anoMes, mesNumMes] = mes.split('-');
+    const mesLabel = `${nomesMeses[parseInt(mesNumMes, 10) - 1]}/${anoMes}`;
 
     if (!window.confirm(`Fechar ${mesLabel}? Isso salva uma foto das comissões atuais no histórico do Dashboard e zera todos os campos da aba Comissões (incluindo o MEI) pra um novo ciclo.`)) return;
 

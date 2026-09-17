@@ -458,7 +458,7 @@ ${linhasBarbeiros}`;
       <pre className="resumo-texto">{texto}</pre>
       <div className="acoes" style={{ marginTop: 10 }}>
         <button onClick={copiar} className="btn-transferir">{copiado ? '✓ Copiado!' : 'Copiar Resumo'}</button>
-        <button onClick={onFecharMes} className="btn-editar">Fechar Ciclo de Comissões</button>
+        <button onClick={() => onFecharMes(mesFechamento)} className="btn-editar">Fechar Ciclo de Comissões</button>
       </div>
     </div>
   );
