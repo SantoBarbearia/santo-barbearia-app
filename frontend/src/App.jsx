@@ -5,7 +5,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Conciliacao from './Conciliacao';
 import Dashboard from './Dashboard';
-import CategoriaSelect from './CategoriaSelect';
+import CategoriaSelect, { separarCategoria } from './CategoriaSelect';
 import GerenciarCategorias from './GerenciarCategorias';
 import DadosEmpresa from './DadosEmpresa';
 import { capitalizarTexto } from './utils/texto';
@@ -526,6 +526,29 @@ export default function App() {
       return { nome: l.nome, saldoAnterior: l.saldoAnterior, saldoFinal: l.saldoFinal, transacoes };
     });
 
+    // Resumo por Classificação Contábil — mesmo filtro de período/conta do
+    // resto do relatório, pra facilitar o trabalho do contador (economiza
+    // ele ter que somar linha por linha). Transferência entre contas próprias
+    // fica de fora (não é Receita nem Despesa, é só dinheiro mudando de
+    // lugar); um lançamento sem classificação ainda entra, agrupado em "Sem
+    // Classificação", pra não escapar do resumo sem ela notar.
+    const gruposClassificacao = new Map();
+    movimentacoesVGporConta
+      .filter((m) => m.tipo !== 'Transferência')
+      .forEach((m) => {
+        const { nivel1, nivel2 } = separarCategoria(m.categoria);
+        const label = m.categoria || 'Sem Classificação';
+        if (!gruposClassificacao.has(label)) {
+          gruposClassificacao.set(label, { nivel1, nivel2, label, entradas: 0, saidas: 0 });
+        }
+        const grupo = gruposClassificacao.get(label);
+        if (tipoVisualMovimentacao(m) === 'entrada') grupo.entradas += m.valor;
+        else grupo.saidas += m.valor;
+      });
+    const resumoPorClassificacao = [...gruposClassificacao.values()]
+      .map((g) => ({ ...g, total: g.entradas - g.saidas }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+
     return {
       periodoLabel,
       tipoContaLabel: vgTipoConta === 'todas' ? 'Todas' : nomesContas[vgTipoConta],
@@ -534,6 +557,7 @@ export default function App() {
       qtdContasAbertas: abertasVG.length,
       saldoPorConta: saldoPorContaVG,
       totalSaldoFinal: saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0),
+      resumoPorClassificacao,
       blocosPorConta,
       contasAPagarLinhas: contasAPagarVG.map(c => ({
         descricao: c.descricao, categoria: c.categoria || '', vencimento: c.vencimento,
@@ -630,6 +654,19 @@ export default function App() {
       dadosRel.saldoPorConta.reduce((s, l) => s + l.saldo, 0),
       dadosRel.totalSaldoFinal
     ], [2, 3, 4, 5, 6]);
+    r++;
+    wsResumo.getCell(r, 1).value = 'Resumo do Período por Classificação Contábil';
+    wsResumo.getCell(r, 1).font = { bold: true };
+    r++;
+    linha(['Classificação Contábil', 'Entradas', 'Saídas', 'Total']);
+    wsResumo.getRow(r - 1).font = { bold: true };
+    dadosRel.resumoPorClassificacao.forEach((c) => linha([c.label, c.entradas, -c.saidas, c.total], [2, 3, 4]));
+    linha([
+      'Total',
+      dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.entradas, 0),
+      -dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.saidas, 0),
+      dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.total, 0)
+    ], [2, 3, 4]);
 
     // --- Aba Movimentações ---
     const wsMov = workbook.addWorksheet('Movimentações');
@@ -776,6 +813,30 @@ export default function App() {
           { content: formatarMoedaPDF(-dadosRel.saldoPorConta.reduce((s, l) => s + l.saidas, 0)), styles: { fontStyle: 'bold' } },
           { content: formatarMoedaPDF(dadosRel.saldoPorConta.reduce((s, l) => s + l.saldo, 0)), styles: { fontStyle: 'bold' } },
           { content: formatarMoedaPDF(dadosRel.totalSaldoFinal), styles: { fontStyle: 'bold' } }
+        ]
+      ]
+    });
+    y = doc.lastAutoTable.finalY + 10;
+
+    // --- Resumo por Classificação Contábil ---
+    garantirEspaco(20);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Resumo do Período por Classificação Contábil', MARGEM, y);
+    y += 6;
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGEM, right: MARGEM },
+      styles: { fontSize: 8.5 },
+      headStyles: { fillColor: [9, 74, 0] },
+      head: [['Classificação Contábil', 'Entradas', 'Saídas', 'Total']],
+      body: [
+        ...dadosRel.resumoPorClassificacao.map(c => [c.label, formatarMoedaPDF(c.entradas), formatarMoedaPDF(-c.saidas), formatarMoedaPDF(c.total)]),
+        [
+          { content: 'Total', styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.entradas, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(-dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.saidas, 0)), styles: { fontStyle: 'bold' } },
+          { content: formatarMoedaPDF(dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.total, 0)), styles: { fontStyle: 'bold' } }
         ]
       ]
     });
