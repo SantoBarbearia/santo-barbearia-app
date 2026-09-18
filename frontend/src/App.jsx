@@ -455,6 +455,28 @@ export default function App() {
   });
   const totalTaxaMaquininhaVG = movimentacoesVGporConta.filter(ehTaxaMaquininha).reduce((s, m) => s + m.valor, 0);
 
+  // Quanto do total de Entradas/Saídas é Transferência entre as próprias
+  // contas (Caixa/Cofre/Reserva/Sicredi) — dinheiro só mudando de lugar, não
+  // é receita nem despesa de verdade. Quando "Tipo de Conta" está em
+  // "Todas", uma transferência conta como entrada na conta de destino E
+  // saída na de origem, então soma nos dois totais e infla o "bruto" de
+  // Entradas muito além do que veio de clientes — isolar esse valor aqui
+  // deixa claro pra quem olhar (inclusive leigo) quanto é dinheiro "novo" de
+  // fato e quanto é só remanejamento interno.
+  let totalTransferenciasEntradaVG = 0;
+  let totalTransferenciasSaidaVG = 0;
+  contasParaSaldoVG.forEach(chave => {
+    movimentacoesVG.forEach(m => {
+      if (m.tipo !== 'Transferência') return;
+      if (m.para === chave) totalTransferenciasEntradaVG += m.valor;
+      if (m.de === chave) totalTransferenciasSaidaVG += m.valor;
+    });
+  });
+  const totalEntradasVG = saldoPorContaVG.reduce((s, l) => s + l.entradas, 0);
+  const totalSaidasVG = saldoPorContaVG.reduce((s, l) => s + l.saidas, 0);
+  const entradasExternasVG = totalEntradasVG - totalTransferenciasEntradaVG;
+  const saidasExternasVG = totalSaidasVG - totalTransferenciasSaidaVG;
+
   // Saldo de uma conta ao FINAL do período filtrado na Visão Geral (ou o saldo
   // atual de verdade, se nenhum período estiver filtrado) — independente do
   // filtro de "Tipo de Conta", pra poder mostrar as 4 contas nos cartões do
@@ -603,6 +625,10 @@ export default function App() {
       saldoPorConta: saldoPorContaVG,
       totalSaldoFinal: saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0),
       totalTaxaMaquininha: totalTaxaMaquininhaVG,
+      totalTransferenciasEntrada: totalTransferenciasEntradaVG,
+      totalTransferenciasSaida: totalTransferenciasSaidaVG,
+      entradasExternas: entradasExternasVG,
+      saidasExternas: saidasExternasVG,
       resumoPorClassificacao,
       faturamentoTotalPeriodo,
       faturamentoServicosPeriodo,
@@ -725,6 +751,25 @@ export default function App() {
     ], [2, 3, 4, 5, 6]);
     if (dadosRel.totalTaxaMaquininha > 0) {
       wsResumo.getCell(r, 1).value = `Obs: Entradas/Saídas acima já saem líquidas da taxa da maquininha (R$ ${dadosRel.totalTaxaMaquininha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil abaixo.`;
+      wsResumo.getCell(r, 1).font = { italic: true, size: 9 };
+      r++;
+    }
+    if (dadosRel.totalTransferenciasEntrada > 0 || dadosRel.totalTransferenciasSaida > 0) {
+      r++;
+      wsResumo.getCell(r, 1).value = 'De onde vieram as Entradas e Saídas';
+      wsResumo.getCell(r, 1).font = { bold: true };
+      r++;
+      linha(['', 'Entradas', 'Saídas']);
+      wsResumo.getRow(r - 1).font = { bold: true };
+      linha(['Transferência entre contas próprias (não é receita nem despesa)', dadosRel.totalTransferenciasEntrada, -dadosRel.totalTransferenciasSaida], [2, 3]);
+      linha(['Recebido/pago de fora (clientes, fornecedores, despesas...)', dadosRel.entradasExternas, -dadosRel.saidasExternas], [2, 3]);
+      linha([
+        'Total (bate com o Saldo do Período por Conta acima)',
+        dadosRel.saldoPorConta.reduce((s, l) => s + l.entradas, 0),
+        -dadosRel.saldoPorConta.reduce((s, l) => s + l.saidas, 0)
+      ], [2, 3]);
+      wsResumo.getRow(r - 1).font = { bold: true };
+      wsResumo.getCell(r, 1).value = '"Recebido/pago de fora" inclui tudo — Faturamento, Outras Receitas, Despesas etc. — sem separar por classificação; pra isso, veja o Resumo por Classificação Contábil abaixo.';
       wsResumo.getCell(r, 1).font = { italic: true, size: 9 };
       r++;
     }
@@ -934,6 +979,44 @@ export default function App() {
       doc.setTextColor(120);
       doc.text(
         `Obs: Entradas/Saídas acima já saem líquidas da taxa da maquininha (${formatarMoedaPDF(dadosRel.totalTaxaMaquininha)} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil abaixo.`,
+        MARGEM, y, { maxWidth: LARGURA_PAGINA - 2 * MARGEM }
+      );
+      doc.setTextColor(0);
+      doc.setFont(undefined, 'normal');
+      y += 12;
+    }
+
+    // --- De onde vieram as Entradas e Saídas (transferência x externo) ---
+    if (dadosRel.totalTransferenciasEntrada > 0 || dadosRel.totalTransferenciasSaida > 0) {
+      garantirEspaco(30);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(11);
+      doc.text('De onde vieram as Entradas e Saídas', MARGEM, y);
+      y += 6;
+      const totalEntradasTab = dadosRel.saldoPorConta.reduce((s, l) => s + l.entradas, 0);
+      const totalSaidasTab = dadosRel.saldoPorConta.reduce((s, l) => s + l.saidas, 0);
+      autoTable(doc, {
+        startY: y,
+        margin: { left: MARGEM, right: MARGEM },
+        styles: { fontSize: 8.5 },
+        headStyles: { fillColor: [9, 74, 0] },
+        head: [['', 'Entradas', 'Saídas']],
+        body: [
+          ['Transferência entre contas próprias (não é receita nem despesa)', formatarMoedaPDF(dadosRel.totalTransferenciasEntrada), formatarMoedaPDF(-dadosRel.totalTransferenciasSaida)],
+          ['Recebido/pago de fora (clientes, fornecedores, despesas...)', formatarMoedaPDF(dadosRel.entradasExternas), formatarMoedaPDF(-dadosRel.saidasExternas)],
+          [
+            { content: 'Total (bate com o Saldo do Período por Conta acima)', styles: { fontStyle: 'bold' } },
+            { content: formatarMoedaPDF(totalEntradasTab), styles: { fontStyle: 'bold' } },
+            { content: formatarMoedaPDF(-totalSaidasTab), styles: { fontStyle: 'bold' } }
+          ]
+        ]
+      });
+      y = doc.lastAutoTable.finalY + 3;
+      doc.setFont(undefined, 'italic');
+      doc.setFontSize(8);
+      doc.setTextColor(120);
+      doc.text(
+        '"Recebido/pago de fora" inclui tudo — Faturamento, Outras Receitas, Despesas etc. — sem separar por classificação; pra isso, veja o Resumo por Classificação Contábil abaixo.',
         MARGEM, y, { maxWidth: LARGURA_PAGINA - 2 * MARGEM }
       );
       doc.setTextColor(0);
@@ -2207,6 +2290,40 @@ export default function App() {
                   <p className="upload-dica" style={{ marginTop: 10 }}>
                     Entradas/Saídas acima já saem líquidas da taxa da maquininha (R$ {totalTaxaMaquininhaVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil, mais abaixo.
                   </p>
+                )}
+                {(totalTransferenciasEntradaVG > 0 || totalTransferenciasSaidaVG > 0) && (
+                  <>
+                    <h4 style={{ marginTop: 15, marginBottom: 8 }}>De onde vieram as Entradas e Saídas</h4>
+                    <table className="tabela-saldo-conta">
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>Entradas</th>
+                          <th>Saídas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td>Transferência entre contas próprias (não é receita nem despesa)</td>
+                          <td className="valor-entrada">R$ {totalTransferenciasEntradaVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="valor-saida">R$ {totalTransferenciasSaidaVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        </tr>
+                        <tr>
+                          <td>Recebido/pago de fora (clientes, fornecedores, despesas...)</td>
+                          <td className="valor-entrada">R$ {entradasExternasVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="valor-saida">R$ {saidasExternasVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        </tr>
+                        <tr>
+                          <td><strong>Total (bate com a tabela acima)</strong></td>
+                          <td className="valor-entrada"><strong>R$ {totalEntradasVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
+                          <td className="valor-saida"><strong>R$ {totalSaidasVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p className="upload-dica" style={{ marginTop: 8 }}>
+                      "Recebido/pago de fora" inclui tudo — Faturamento, Outras Receitas, Despesas etc. — sem separar por classificação; pra isso, veja o Resumo por Classificação Contábil mais abaixo.
+                    </p>
+                  </>
                 )}
               </div>
 
