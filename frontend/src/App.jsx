@@ -150,6 +150,7 @@ export default function App() {
   const [vgPeriodoFim, setVgPeriodoFim] = useState('');
   const [vgTipoConta, setVgTipoConta] = useState('todas');
   const [mostrarDetalheAbertas, setMostrarDetalheAbertas] = useState(false);
+  const [gerandoBackup, setGerandoBackup] = useState(false);
 
   // Carregar dados do Supabase
   useEffect(() => {
@@ -332,6 +333,46 @@ export default function App() {
         'Verifique sua internet e se o projeto do Supabase não está pausado (supabase.com → seu projeto → ' +
         '"Restore project" se aparecer pausado). Depois repita essa alteração.'
       );
+    }
+  };
+
+  // Todas as tabelas que o app guarda no Supabase — usado pra baixar um
+  // backup completo (Parâmetros > Backup). Lê direto do banco (não do estado
+  // local) pra garantir que pega exatamente o que está salvo de verdade.
+  const TABELAS_BACKUP = [
+    'contas', 'contas_pagar', 'comissoes', 'movimentacoes', 'fechamentos',
+    'notas_dashboard', 'categorias_contabeis', 'dados_empresa', 'faturamento_manual',
+    'parametros_projecao', 'pagamentos_nao_identificados',
+    'resgates_cashbarber_pendentes', 'resgates_cashbarber_lancados'
+  ];
+
+  const handleBaixarBackupCompleto = async () => {
+    setGerandoBackup(true);
+    try {
+      const buscarTudo = Promise.all(
+        TABELAS_BACKUP.map((tabela) => supabase.from(tabela).select('*'))
+      );
+      const semResposta = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('tempo esgotado')), 20000)
+      );
+      const resultados = await Promise.race([buscarTudo, semResposta]);
+      const erros = resultados
+        .map((r, i) => r.error ? `${TABELAS_BACKUP[i]} (${r.error.message})` : null)
+        .filter(Boolean);
+      if (erros.length > 0) {
+        alert('Não consegui baixar o backup completo. Erro em: ' + erros.join(', '));
+        return;
+      }
+      const backup = {
+        geradoEm: new Date().toISOString(),
+        tabelas: Object.fromEntries(TABELAS_BACKUP.map((tabela, i) => [tabela, resultados[i].data]))
+      };
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      baixarArquivo(blob, `backup-santo-barbearia-${new Date().toISOString().slice(0, 10)}.json`);
+    } catch (erro) {
+      alert('Não consegui baixar o backup completo: ' + erro.message);
+    } finally {
+      setGerandoBackup(false);
     }
   };
 
@@ -2905,6 +2946,17 @@ export default function App() {
 
           {activeTab === 'parametros' && (
             <div>
+              <div className="card">
+                <h3>Backup</h3>
+                <p className="upload-dica">
+                  Baixa uma cópia completa de tudo que está salvo no sistema (movimentações, contas a pagar, comissões, etc.)
+                  num arquivo no seu computador. Guarde esse arquivo em algum lugar seguro (Google Drive, por exemplo).
+                  Recomendamos baixar um backup periodicamente (ex: uma vez por semana).
+                </p>
+                <button onClick={handleBaixarBackupCompleto} disabled={gerandoBackup} className="btn-transferir">
+                  {gerandoBackup ? 'Gerando backup...' : '⬇️ Baixar Backup Completo'}
+                </button>
+              </div>
               <GerenciarCategorias
                 categorias={categorias}
                 onAdicionar={handleAdicionarCategoria}
