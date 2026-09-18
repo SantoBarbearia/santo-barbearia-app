@@ -678,6 +678,21 @@ export default function App() {
     linha(['Tipo de Conta', dadosRel.tipoContaLabel]);
     linha(['Gerado em', dadosRel.geradoEm]);
     r++;
+    wsResumo.getCell(r, 1).value = 'Faturamento e Comissões do Período';
+    wsResumo.getCell(r, 1).font = { bold: true };
+    r++;
+    linha(['Faturamento Total (Produtos + Serviços)', dadosRel.faturamentoTotalPeriodo], [2]);
+    linha(['   Faturamento de Serviços', dadosRel.faturamentoServicosPeriodo], [2]);
+    linha(['   Faturamento de Produtos', dadosRel.faturamentoProdutosPeriodo], [2]);
+    r++;
+    linha(['Comissão Bruta dos Barbeiros', dadosRel.comissaoBrutaPeriodo], [2]);
+    linha(['   (-) Vale', dadosRel.totalValePeriodo], [2]);
+    linha(['   (-) Consumo', dadosRel.totalConsumoPeriodo], [2]);
+    linha(['   (-) MEI', dadosRel.totalMeiPeriodo], [2]);
+    linha(['Comissão Líquida dos Barbeiros', dadosRel.comissaoLiquidaPeriodo], [2]);
+    wsResumo.getCell(r, 1).value = 'Obs: Comissões somam só os meses já fechados no período (Dashboard > Comissões > "Fechar Ciclo de Comissões") — o ciclo em andamento não entra, porque não tem uma data associada.';
+    wsResumo.getCell(r, 1).font = { italic: true, size: 9 };
+    r++;
     linha(['Total a Pagar (contas em aberto no período)', dadosRel.totalAPagar], [2]);
     linha(['Quantidade de Contas Abertas', dadosRel.qtdContasAbertas]);
     r++;
@@ -708,22 +723,6 @@ export default function App() {
       -dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.saidas, 0),
       dadosRel.resumoPorClassificacao.reduce((s, c) => s + c.total, 0)
     ], [2, 3, 4]);
-    r++;
-    wsResumo.getCell(r, 1).value = 'Faturamento e Comissões do Período';
-    wsResumo.getCell(r, 1).font = { bold: true };
-    r++;
-    linha(['Faturamento Total (Produtos + Serviços)', dadosRel.faturamentoTotalPeriodo], [2]);
-    linha(['   Faturamento de Serviços', dadosRel.faturamentoServicosPeriodo], [2]);
-    linha(['   Faturamento de Produtos', dadosRel.faturamentoProdutosPeriodo], [2]);
-    r++;
-    linha(['Comissão Bruta dos Barbeiros', dadosRel.comissaoBrutaPeriodo], [2]);
-    linha(['   (-) Vale', dadosRel.totalValePeriodo], [2]);
-    linha(['   (-) Consumo', dadosRel.totalConsumoPeriodo], [2]);
-    linha(['   (-) MEI', dadosRel.totalMeiPeriodo], [2]);
-    linha(['Comissão Líquida dos Barbeiros', dadosRel.comissaoLiquidaPeriodo], [2]);
-    wsResumo.getCell(r, 1).value = 'Obs: Comissões somam só os meses já fechados no período (Dashboard > Comissões > "Fechar Ciclo de Comissões") — o ciclo em andamento não entra, porque não tem uma data associada.';
-    wsResumo.getCell(r, 1).font = { italic: true, size: 9 };
-    r++;
 
     // --- Aba Movimentações ---
     const wsMov = workbook.addWorksheet('Movimentações');
@@ -835,6 +834,41 @@ export default function App() {
       }
     };
 
+    // --- Faturamento e Comissões do Período (primeiro, é o que mais importa
+    // pro contador — o resto do relatório serve de detalhamento/conferência) ---
+    garantirEspaco(30);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Faturamento e Comissões do Período', MARGEM, y);
+    y += 6;
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGEM, right: MARGEM },
+      styles: { fontSize: 9 },
+      theme: 'plain',
+      body: [
+        [{ content: 'Faturamento Total (Produtos + Serviços)', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.faturamentoTotalPeriodo), styles: { fontStyle: 'bold' } }],
+        ['   Faturamento de Serviços', formatarMoedaPDF(dadosRel.faturamentoServicosPeriodo)],
+        ['   Faturamento de Produtos', formatarMoedaPDF(dadosRel.faturamentoProdutosPeriodo)],
+        [{ content: 'Comissão Bruta dos Barbeiros', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.comissaoBrutaPeriodo), styles: { fontStyle: 'bold' } }],
+        ['   (-) Vale', formatarMoedaPDF(dadosRel.totalValePeriodo)],
+        ['   (-) Consumo', formatarMoedaPDF(dadosRel.totalConsumoPeriodo)],
+        ['   (-) MEI', formatarMoedaPDF(dadosRel.totalMeiPeriodo)],
+        [{ content: 'Comissão Líquida dos Barbeiros', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.comissaoLiquidaPeriodo), styles: { fontStyle: 'bold' } }]
+      ]
+    });
+    y = doc.lastAutoTable.finalY + 3;
+    doc.setFont(undefined, 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(
+      'Obs: Comissões somam só os meses já fechados no período (Dashboard > Comissões > "Fechar Ciclo de Comissões") — o ciclo em andamento não entra, porque não tem uma data associada.',
+      MARGEM, y, { maxWidth: LARGURA_PAGINA - 2 * MARGEM }
+    );
+    doc.setTextColor(0);
+    doc.setFont(undefined, 'normal');
+    y += 12;
+
     // --- Resumo ---
     doc.setFont(undefined, 'bold');
     doc.setFontSize(11);
@@ -898,40 +932,6 @@ export default function App() {
       ]
     });
     y = doc.lastAutoTable.finalY + 10;
-
-    // --- Faturamento e Comissões do Período ---
-    garantirEspaco(30);
-    doc.setFont(undefined, 'bold');
-    doc.setFontSize(11);
-    doc.text('Faturamento e Comissões do Período', MARGEM, y);
-    y += 6;
-    autoTable(doc, {
-      startY: y,
-      margin: { left: MARGEM, right: MARGEM },
-      styles: { fontSize: 9 },
-      theme: 'plain',
-      body: [
-        [{ content: 'Faturamento Total (Produtos + Serviços)', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.faturamentoTotalPeriodo), styles: { fontStyle: 'bold' } }],
-        ['   Faturamento de Serviços', formatarMoedaPDF(dadosRel.faturamentoServicosPeriodo)],
-        ['   Faturamento de Produtos', formatarMoedaPDF(dadosRel.faturamentoProdutosPeriodo)],
-        [{ content: 'Comissão Bruta dos Barbeiros', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.comissaoBrutaPeriodo), styles: { fontStyle: 'bold' } }],
-        ['   (-) Vale', formatarMoedaPDF(dadosRel.totalValePeriodo)],
-        ['   (-) Consumo', formatarMoedaPDF(dadosRel.totalConsumoPeriodo)],
-        ['   (-) MEI', formatarMoedaPDF(dadosRel.totalMeiPeriodo)],
-        [{ content: 'Comissão Líquida dos Barbeiros', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(dadosRel.comissaoLiquidaPeriodo), styles: { fontStyle: 'bold' } }]
-      ]
-    });
-    y = doc.lastAutoTable.finalY + 3;
-    doc.setFont(undefined, 'italic');
-    doc.setFontSize(8);
-    doc.setTextColor(120);
-    doc.text(
-      'Obs: Comissões somam só os meses já fechados no período (Dashboard > Comissões > "Fechar Ciclo de Comissões") — o ciclo em andamento não entra, porque não tem uma data associada.',
-      MARGEM, y, { maxWidth: LARGURA_PAGINA - 2 * MARGEM }
-    );
-    doc.setTextColor(0);
-    doc.setFont(undefined, 'normal');
-    y += 12;
 
     // --- Movimentações (uma tabela por conta, igual ao Excel) ---
     garantirEspaco(14);
