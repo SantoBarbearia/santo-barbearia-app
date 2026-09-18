@@ -19,6 +19,7 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const BARBEIROS_CHAVES = ['eduardo', 'gabriel', 'thais', 'thiago'];
+const CATEGORIA_TAXA_MAQUININHA = 'Taxas de Cartão/Maquininha > MDR (Taxa da Maquininha)';
 const CAMPOS_COMISSAO = ['servicos', 'produtos', 'assinatura', 'vale', 'consumo', 'mei'];
 
 // A tabela "comissoes" no Supabase guarda uma coluna por barbeiro+campo
@@ -422,7 +423,15 @@ export default function App() {
     return saldo;
   };
 
-  // Saldo do período (entradas, saídas e saldo) por tipo de conta
+  // Saldo do período (entradas, saídas e saldo) por tipo de conta — é essa
+  // tabela que o contador confere linha a linha contra o extrato do banco,
+  // então Entradas/Saídas aqui precisam bater com o que o banco mostra.
+  // A taxa da maquininha é descontada ANTES do dinheiro cair na conta (o
+  // extrato nunca vê ela como um débito separado, só recebe o valor já
+  // líquido) — por isso ela não entra como Saída aqui, e é abatida da
+  // Entrada bruta correspondente. O valor bruto (antes da taxa) e a taxa
+  // descontada continuam detalhados no Resumo por Classificação Contábil.
+  const ehTaxaMaquininha = (m) => m.categoria === CATEGORIA_TAXA_MAQUININHA;
   const contasParaSaldoVG = vgTipoConta === 'todas' ? Object.keys(nomesContas) : [vgTipoConta];
   const saldoPorContaVG = contasParaSaldoVG.map(chave => {
     let entradas = 0;
@@ -432,7 +441,9 @@ export default function App() {
         if (m.de === chave) saidas += m.valor;
         if (m.para === chave) entradas += m.valor;
       } else if (m.conta === chave) {
-        if (m.tipo === 'Despesa Paga' || m.tipo === 'Débito Manual') {
+        if (ehTaxaMaquininha(m)) {
+          entradas -= m.valor;
+        } else if (m.tipo === 'Despesa Paga' || m.tipo === 'Débito Manual') {
           saidas += m.valor;
         } else {
           entradas += m.valor;
@@ -442,6 +453,7 @@ export default function App() {
     const saldoAnterior = saldoAnteriorConta(chave);
     return { chave, nome: nomesContas[chave], saldoAnterior, entradas, saidas, saldo: entradas - saidas, saldoFinal: saldoAnterior + (entradas - saidas) };
   });
+  const totalTaxaMaquininhaVG = movimentacoesVGporConta.filter(ehTaxaMaquininha).reduce((s, m) => s + m.valor, 0);
 
   // Saldo de uma conta ao FINAL do período filtrado na Visão Geral (ou o saldo
   // atual de verdade, se nenhum período estiver filtrado) — independente do
@@ -590,6 +602,7 @@ export default function App() {
       qtdContasAbertas: abertasVG.length,
       saldoPorConta: saldoPorContaVG,
       totalSaldoFinal: saldoPorContaVG.reduce((s, l) => s + l.saldoFinal, 0),
+      totalTaxaMaquininha: totalTaxaMaquininhaVG,
       resumoPorClassificacao,
       faturamentoTotalPeriodo,
       faturamentoServicosPeriodo,
@@ -710,6 +723,11 @@ export default function App() {
       dadosRel.saldoPorConta.reduce((s, l) => s + l.saldo, 0),
       dadosRel.totalSaldoFinal
     ], [2, 3, 4, 5, 6]);
+    if (dadosRel.totalTaxaMaquininha > 0) {
+      wsResumo.getCell(r, 1).value = `Obs: Entradas/Saídas acima já saem líquidas da taxa da maquininha (R$ ${dadosRel.totalTaxaMaquininha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil abaixo.`;
+      wsResumo.getCell(r, 1).font = { italic: true, size: 9 };
+      r++;
+    }
     r++;
     wsResumo.getCell(r, 1).value = 'Resumo do Período por Classificação Contábil';
     wsResumo.getCell(r, 1).font = { bold: true };
@@ -907,7 +925,21 @@ export default function App() {
         ]
       ]
     });
-    y = doc.lastAutoTable.finalY + 10;
+    y = doc.lastAutoTable.finalY + (dadosRel.totalTaxaMaquininha > 0 ? 3 : 10);
+
+    if (dadosRel.totalTaxaMaquininha > 0) {
+      garantirEspaco(12);
+      doc.setFont(undefined, 'italic');
+      doc.setFontSize(8);
+      doc.setTextColor(120);
+      doc.text(
+        `Obs: Entradas/Saídas acima já saem líquidas da taxa da maquininha (${formatarMoedaPDF(dadosRel.totalTaxaMaquininha)} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil abaixo.`,
+        MARGEM, y, { maxWidth: LARGURA_PAGINA - 2 * MARGEM }
+      );
+      doc.setTextColor(0);
+      doc.setFont(undefined, 'normal');
+      y += 12;
+    }
 
     // --- Resumo por Classificação Contábil ---
     garantirEspaco(20);
@@ -2171,6 +2203,11 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+                {totalTaxaMaquininhaVG > 0 && (
+                  <p className="upload-dica" style={{ marginTop: 10 }}>
+                    Entradas/Saídas acima já saem líquidas da taxa da maquininha (R$ {totalTaxaMaquininhaVG.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} no período) — é assim que batem com o extrato do banco, que nunca vê essa taxa como um débito separado. O valor bruto recebido no cartão e a taxa descontada continuam detalhados no Resumo por Classificação Contábil, mais abaixo.
+                  </p>
+                )}
               </div>
 
               <div className="card">
