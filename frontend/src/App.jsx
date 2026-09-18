@@ -2649,7 +2649,6 @@ export default function App() {
               <Dashboard
                 comissoes={comissoes}
                 barbeiros={barbeiros}
-                contasAPagar={contasAPagar}
                 fechamentos={fechamentos}
                 notas={notas}
                 movimentacoes={movimentacoes}
