@@ -212,28 +212,27 @@ function GraficoLinhaFaturamento({ fechamentos, faturamentoManual, movimentacoes
   );
 }
 
-function GraficoBarrasDespesas({ contasAPagar }) {
+function GraficoBarrasDespesas({ movimentacoes }) {
   const [periodoInicio, setPeriodoInicio] = useState('');
   const [periodoFim, setPeriodoFim] = useState('');
 
-  const dentroDoPeriodo = (dataBR) => {
+  const dentroDoPeriodo = (dataISO) => {
     if (!periodoInicio && !periodoFim) return true;
-    const [dia, mes, ano] = dataBR.split('/');
-    const iso = `${ano}-${mes}-${dia}`;
-    if (periodoInicio && iso < periodoInicio) return false;
-    if (periodoFim && iso > periodoFim) return false;
+    if (periodoInicio && dataISO < periodoInicio) return false;
+    if (periodoFim && dataISO > periodoFim) return false;
     return true;
   };
 
-  // Filtra pela data em que a despesa foi de fato PAGA (quando saiu do banco
-  // de verdade), não pelo vencimento — o vencimento quase sempre cai num mês
-  // diferente do pagamento, então filtrar por ele fazia o gráfico não trazer
-  // nada quando ela filtrava pelo período em que realmente pagou as contas.
-  const filtradas = contasAPagar.filter(c => c.status === 'Pago' && dentroDoPeriodo(c.dataPagamento || c.vencimento));
+  // Vem das movimentações reais (Débito Manual/Despesa Paga), não só das
+  // Contas a Pagar marcadas como "Pago" — despesa lançada direto (pela
+  // Conciliação ou por "Adicionar Crédito/Débito") nunca vira uma Conta a
+  // Pagar, então filtrar só por ali deixava esse gráfico praticamente vazio
+  // mesmo com um período cheio de despesas de verdade.
+  const filtradas = movimentacoes.filter(m => tipoVisualMovimentacao(m) === 'saida' && dentroDoPeriodo(dataMovParaISO(m.data)));
   const porCategoria = {};
-  filtradas.forEach(c => {
-    const cat = c.categoria || 'Sem classificação';
-    porCategoria[cat] = (porCategoria[cat] || 0) + c.valor;
+  filtradas.forEach(m => {
+    const cat = m.categoria || 'Sem Classificação';
+    porCategoria[cat] = (porCategoria[cat] || 0) + m.valor;
   });
   const dados = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]);
   const maxValor = Math.max(1, ...dados.map(d => d[1]));
@@ -455,7 +454,6 @@ ${linhasBarbeiros}`;
         </div>
       )}
 
-      <pre className="resumo-texto">{texto}</pre>
       <div className="acoes" style={{ marginTop: 10 }}>
         <button onClick={copiar} className="btn-transferir">{copiado ? '✓ Copiado!' : 'Copiar Resumo'}</button>
         <button onClick={() => onFecharMes(mesFechamento)} className="btn-editar">Fechar Ciclo de Comissões</button>
@@ -699,7 +697,7 @@ function Observacoes({ notas, onAdicionarNota, onExcluirNota }) {
   );
 }
 
-export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, projecaoParametros, onSalvarProjecaoParametros, onFecharMes, onAdicionarNota, onExcluirNota }) {
+export default function Dashboard({ comissoes, barbeiros, fechamentos, notas, movimentacoes, faturamentoManual, onSalvarFaturamentoProdutos, onSalvarFaturamentoTotalManual, projecaoParametros, onSalvarProjecaoParametros, onFecharMes, onAdicionarNota, onExcluirNota }) {
   return (
     <div>
       <ResumoContabilidade
@@ -727,7 +725,7 @@ export default function Dashboard({ comissoes, barbeiros, contasAPagar, fechamen
 
       <div className="card">
         <h3>Despesas por Classificação Contábil</h3>
-        <GraficoBarrasDespesas contasAPagar={contasAPagar} />
+        <GraficoBarrasDespesas movimentacoes={movimentacoes} />
       </div>
 
       <Observacoes notas={notas} onAdicionarNota={onAdicionarNota} onExcluirNota={onExcluirNota} />
