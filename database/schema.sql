@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   -- Só uma sinalização visual (não gera lançamentos futuros automaticamente,
   -- diferente da recorrência de Contas a Pagar).
   recorrente BOOLEAN DEFAULT FALSE,
+  -- Marca uma Transferência que na verdade é troca de dinheiro com um
+  -- cliente (ex: Pix dele na Conta Corrente x dinheiro do Caixa pra ele) —
+  -- não é remanejamento interno de verdade, então entra como "Recebido/pago
+  -- de fora" no relatório em vez de "Transferência entre contas próprias".
+  externa BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 

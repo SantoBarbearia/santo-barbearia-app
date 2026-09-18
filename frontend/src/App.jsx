@@ -128,7 +128,8 @@ export default function App() {
     de: 'caixa',
     para: 'sicredi',
     valor: 0,
-    data: new Date().toISOString().split('T')[0]
+    data: new Date().toISOString().split('T')[0],
+    externa: false
   });
   const [ajuste, setAjuste] = useState({ conta: 'caixa', tipo: 'credito', valor: '', descricao: '', categoria: '', data: new Date().toISOString().slice(0, 10) });
   const [periodoInicio, setPeriodoInicio] = useState('');
@@ -463,11 +464,16 @@ export default function App() {
   // Entradas muito além do que veio de clientes — isolar esse valor aqui
   // deixa claro pra quem olhar (inclusive leigo) quanto é dinheiro "novo" de
   // fato e quanto é só remanejamento interno.
+  // Uma transferência marcada como "externa" (ex: troca de dinheiro com
+  // cliente — ele manda Pix pra Conta Corrente e recebe o mesmo valor em
+  // dinheiro do Caixa) NÃO é remanejamento interno de verdade: o Pix veio de
+  // fora e o dinheiro saiu pra fora, então ela entra como "Recebido/pago de
+  // fora" em vez de cair aqui.
   let totalTransferenciasEntradaVG = 0;
   let totalTransferenciasSaidaVG = 0;
   contasParaSaldoVG.forEach(chave => {
     movimentacoesVG.forEach(m => {
-      if (m.tipo !== 'Transferência') return;
+      if (m.tipo !== 'Transferência' || m.externa) return;
       if (m.para === chave) totalTransferenciasEntradaVG += m.valor;
       if (m.de === chave) totalTransferenciasSaidaVG += m.valor;
     });
@@ -540,7 +546,8 @@ export default function App() {
         if (m.tipo === 'Transferência') {
           const saida = m.de === l.chave;
           valorComSinal = saida ? -m.valor : m.valor;
-          tipoLabel = saida ? 'Saída (Transferência)' : 'Entrada (Transferência)';
+          const sufixo = m.externa ? 'Troca c/ Cliente' : 'Transferência';
+          tipoLabel = saida ? `Saída (${sufixo})` : `Entrada (${sufixo})`;
         } else {
           const tipoVisual = tipoVisualMovimentacao(m);
           valorComSinal = tipoVisual === 'saida' ? -m.valor : m.valor;
@@ -2008,21 +2015,25 @@ export default function App() {
     };
 
     const [anoTransf, mesTransf, diaTransf] = transferencia.data.split('-');
+    const externa = !!transferencia.externa;
     const novaMovimentacao = {
       id: Date.now(),
       data: `${diaTransf}/${mesTransf}/${anoTransf}`,
       tipo: 'Transferência',
-      descricao: `De ${nomesContas[transferencia.de]} para ${nomesContas[transferencia.para]}`,
+      descricao: externa
+        ? `Troca de dinheiro com cliente (${nomesContas[transferencia.de]} → ${nomesContas[transferencia.para]})`
+        : `De ${nomesContas[transferencia.de]} para ${nomesContas[transferencia.para]}`,
       valor: parseFloat(transferencia.valor),
       de: transferencia.de,
-      para: transferencia.para
+      para: transferencia.para,
+      externa
     };
 
     const novasMovimentacoes = [...movimentacoes, novaMovimentacao];
 
     setContas(novasContas);
     setMovimentacoes(novasMovimentacoes);
-    setTransferencia({ ...transferencia, valor: 0 });
+    setTransferencia({ ...transferencia, valor: 0, externa: false });
 
     salvarDados({
       contas: novasContas,
@@ -2799,6 +2810,19 @@ export default function App() {
                     }}
                   />
                 </div>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 6, fontWeight: 'normal' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!transferencia.externa}
+                    onChange={(e) => setTransferencia({ ...transferencia, externa: e.target.checked })}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    Isso é troca de dinheiro com cliente (ex: ele te mandou Pix e você deu dinheiro pra ele), não é remanejamento seu entre contas.
+                    <br />
+                    <small>Marcando isso, o valor entra no relatório como dinheiro recebido/pago de fora, não como transferência interna.</small>
+                  </span>
+                </label>
                 <button
                   onClick={handleTransferencia}
                   disabled={transferencia.valor <= 0 || transferencia.de === transferencia.para || !transferencia.data}
@@ -2816,7 +2840,10 @@ export default function App() {
                       {movimentacoes.filter(m => m.tipo === 'Transferência').sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).slice(-5).reverse().map((mov) => (
                         <tr key={mov.id}>
                           <td>{formatarDataMovParaExibir(mov.data)}</td>
-                          <td>{nomesContas[mov.de]} → {nomesContas[mov.para]}</td>
+                          <td>
+                            {nomesContas[mov.de]} → {nomesContas[mov.para]}
+                            {mov.externa && <span className="badge-categoria" style={{ background: '#eaf0fb', color: '#2a56c6', marginLeft: 6 }}> Troca c/ Cliente</span>}
+                          </td>
                           <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td>
                             <button onClick={() => handleExcluirTransferencia(mov.id)} className="btn-excluir">Excluir</button>
