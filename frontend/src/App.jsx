@@ -149,6 +149,7 @@ export default function App() {
   const [vgPeriodoInicio, setVgPeriodoInicio] = useState('');
   const [vgPeriodoFim, setVgPeriodoFim] = useState('');
   const [vgTipoConta, setVgTipoConta] = useState('todas');
+  const [vgTipoMovimento, setVgTipoMovimento] = useState('todas');
   const [mostrarDetalheAbertas, setMostrarDetalheAbertas] = useState(false);
   const [gerandoBackup, setGerandoBackup] = useState(false);
 
@@ -552,6 +553,14 @@ export default function App() {
     if (mov.tipo === 'Despesa Paga' || mov.tipo === 'Débito Manual') return 'saida';
     return 'entrada';
   };
+
+  // Filtro "só Entradas"/"só Saídas" da lista de Movimentações na Visão Geral
+  // -- só enxugam a LISTA exibida; os totais/relatório continuam somando tudo
+  // (movimentacoesVGporConta), senão o Saldo do Período ficaria incoerente
+  // com o filtro (ex: mostrando só entradas mas o saldo contando as saídas).
+  const movimentacoesVGLista = vgTipoMovimento === 'todas'
+    ? movimentacoesVGporConta
+    : movimentacoesVGporConta.filter((m) => tipoVisualMovimentacao(m) === vgTipoMovimento);
 
   const isoParaBR = (iso) => {
     if (!iso) return '';
@@ -2257,7 +2266,7 @@ export default function App() {
                     </select>
                   </div>
                   <button
-                    onClick={() => { setVgPeriodoInicio(''); setVgPeriodoFim(''); setVgTipoConta('todas'); }}
+                    onClick={() => { setVgPeriodoInicio(''); setVgPeriodoFim(''); setVgTipoConta('todas'); setVgTipoMovimento('todas'); }}
                     className="btn-cancelar"
                   >
                     Limpar filtro
@@ -2382,13 +2391,21 @@ export default function App() {
               </div>
 
               <div className="card">
-                <h3>Movimentações {(vgInicio || vgFim || vgTipoConta !== 'todas') ? 'do Período/Conta Filtrados' : ''} ({movimentacoesVGporConta.length})</h3>
-                {movimentacoesVGporConta.length === 0 ? (
-                  <p>Nenhuma movimentação {(vgInicio || vgFim || vgTipoConta !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
+                <h3>Movimentações {(vgInicio || vgFim || vgTipoConta !== 'todas' || vgTipoMovimento !== 'todas') ? 'do Período/Conta Filtrados' : ''} ({movimentacoesVGLista.length})</h3>
+                <div className="input-group" style={{ maxWidth: 220, marginBottom: 12 }}>
+                  <label>Mostrar</label>
+                  <select value={vgTipoMovimento} onChange={(e) => setVgTipoMovimento(e.target.value)}>
+                    <option value="todas">Entradas e Saídas</option>
+                    <option value="entrada">Só Entradas</option>
+                    <option value="saida">Só Saídas</option>
+                  </select>
+                </div>
+                {movimentacoesVGLista.length === 0 ? (
+                  <p>Nenhuma movimentação {(vgInicio || vgFim || vgTipoConta !== 'todas' || vgTipoMovimento !== 'todas') ? 'nesse filtro' : 'registrada'}.</p>
                 ) : (
                   <table className="tabela">
                     <tbody>
-                      {[...movimentacoesVGporConta].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).reverse().map((mov) => {
+                      {[...movimentacoesVGLista].sort((a, b) => dataMovParaISO(a.data).localeCompare(dataMovParaISO(b.data)) || a.id - b.id).reverse().map((mov) => {
                         const tipoVisual = tipoVisualMovimentacao(mov);
                         const editavel = mov.tipo === 'Crédito Manual' || mov.tipo === 'Débito Manual';
 
