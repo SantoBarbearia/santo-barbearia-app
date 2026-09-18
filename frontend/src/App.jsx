@@ -269,38 +269,40 @@ export default function App() {
       if (resultado?.error) erros.push(`${nomeTabela} (${resultado.error.message})`);
     };
 
+    // Salva uma tabela "substituindo" o conteúdo inteiro por `linhas`, do jeito
+    // que o app sempre reenvia as listas completas. ANTES fazíamos
+    // delete-tudo-depois-insere-tudo — se o insert falhasse por qualquer
+    // motivo (ex: uma coluna nova que ainda não existe no banco porque a
+    // migração não rodou), o delete já tinha apagado tudo e o insert falhava
+    // em seguida, zerando a tabela de verdade no Supabase. Agora gravamos
+    // primeiro (upsert, que nunca apaga linha nenhuma) e só apagamos as
+    // linhas que sumiram DEPOIS de confirmar que a gravação deu certo — se o
+    // upsert falhar, nada é apagado, o pior caso é a alteração não salvar.
+    const salvarTabelaSubstituindo = async (nomeTabela, linhas, nomeErro) => {
+      if (linhas.length === 0) {
+        verificar(await supabase.from(nomeTabela).delete().neq('id', -1), nomeErro);
+        return;
+      }
+      const resultadoUpsert = await supabase.from(nomeTabela).upsert(linhas);
+      verificar(resultadoUpsert, nomeErro);
+      if (resultadoUpsert?.error) return;
+      const ids = linhas.map((l) => l.id);
+      verificar(await supabase.from(nomeTabela).delete().not('id', 'in', `(${ids.join(',')})`), nomeErro);
+    };
+
     try {
       const salvarTudo = (async () => {
-        verificar(await supabase.from('contas_pagar').delete().neq('id', -1), 'contas a pagar');
-        if (dados.contasAPagar.length > 0) {
-          // dataPagamentoSelecionada é só um rascunho local (a data escolhida antes de
-          // clicar em "Pagar") — nunca deve ir pro banco. Uma coluna que não existe na
-          // tabela derruba o INSERT inteiro (e o DELETE acima já rodou, apagando tudo).
-          const contasParaSalvar = dados.contasAPagar.map(({ dataPagamentoSelecionada, ...resto }) => resto);
-          verificar(await supabase.from('contas_pagar').insert(contasParaSalvar), 'contas a pagar');
-        }
+        // dataPagamentoSelecionada é só um rascunho local (a data escolhida antes de
+        // clicar em "Pagar") — nunca deve ir pro banco.
+        const contasParaSalvar = dados.contasAPagar.map(({ dataPagamentoSelecionada, ...resto }) => resto);
+        await salvarTabelaSubstituindo('contas_pagar', contasParaSalvar, 'contas a pagar');
 
         verificar(await supabase.from('comissoes').upsert([{ id: 1, ...achatarComissoes(dados.comissoes) }]), 'comissões');
 
-        verificar(await supabase.from('movimentacoes').delete().neq('id', -1), 'movimentações');
-        if (dados.movimentacoes.length > 0) {
-          verificar(await supabase.from('movimentacoes').insert(dados.movimentacoes), 'movimentações');
-        }
-
-        verificar(await supabase.from('fechamentos').delete().neq('id', -1), 'fechamentos');
-        if (dados.fechamentos.length > 0) {
-          verificar(await supabase.from('fechamentos').insert(dados.fechamentos), 'fechamentos');
-        }
-
-        verificar(await supabase.from('notas_dashboard').delete().neq('id', -1), 'observações');
-        if (dados.notas.length > 0) {
-          verificar(await supabase.from('notas_dashboard').insert(dados.notas), 'observações');
-        }
-
-        verificar(await supabase.from('categorias_contabeis').delete().neq('id', -1), 'classificações contábeis');
-        if (dados.categorias.length > 0) {
-          verificar(await supabase.from('categorias_contabeis').insert(dados.categorias), 'classificações contábeis');
-        }
+        await salvarTabelaSubstituindo('movimentacoes', dados.movimentacoes, 'movimentações');
+        await salvarTabelaSubstituindo('fechamentos', dados.fechamentos, 'fechamentos');
+        await salvarTabelaSubstituindo('notas_dashboard', dados.notas, 'observações');
+        await salvarTabelaSubstituindo('categorias_contabeis', dados.categorias, 'classificações contábeis');
 
         // O saldo das contas só é salvo por último, e só se tudo mais acima deu
         // certo — se alguma tabela (principalmente movimentações) falhar no meio
