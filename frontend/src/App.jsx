@@ -1280,6 +1280,16 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
+  // Só uma sinalização visual pra ela reconhecer de relance quais lançamentos
+  // já feitos costumam se repetir (aluguel, internet, assinaturas...) — não
+  // gera lançamentos futuros automaticamente, diferente da recorrência de
+  // Contas a Pagar.
+  const handleAlternarRecorrenteMovimentacao = (id) => {
+    const novasMovimentacoes = movimentacoes.map(m => m.id === id ? { ...m, recorrente: !m.recorrente } : m);
+    setMovimentacoes(novasMovimentacoes);
+    salvarDados({ movimentacoes: novasMovimentacoes });
+  };
+
   const handleAjustarSaldo = () => {
     const valor = parseFloat(ajuste.valor);
     if (!(valor > 0) || !ajuste.data) return;
@@ -2205,6 +2215,7 @@ export default function App() {
                                 {tipoVisual === 'entrada' ? 'Entrada' : tipoVisual === 'saida' ? 'Saída' : 'Transferência'}
                               </span>
                               {mov.descricao}{mov.categoria && <span className="badge-categoria"> {mov.categoria}</span>}
+                              {mov.recorrente && <span className="badge-categoria" style={{ background: '#eaf0fb', color: '#2a56c6' }}> 🔁 Recorrente</span>}
                             </td>
                             <td>R$ {mov.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td>
@@ -2213,12 +2224,22 @@ export default function App() {
                                   <button onClick={() => handleDesfazerPagamento(mov.contaPagarId)} className="btn-excluir">Desfazer Pagamento</button>
                                 </div>
                               )}
-                              {editavel && (
-                                <div className="acoes">
-                                  <button onClick={() => handleIniciarEdicaoMovimentacao(mov)} className="btn-editar">Editar</button>
-                                  <button onClick={() => handleExcluirMovimentacaoManual(mov.id)} className="btn-excluir">Excluir</button>
-                                </div>
-                              )}
+                              <div className="acoes">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!mov.recorrente}
+                                    onChange={() => handleAlternarRecorrenteMovimentacao(mov.id)}
+                                  />
+                                  Recorrente
+                                </label>
+                                {editavel && (
+                                  <>
+                                    <button onClick={() => handleIniciarEdicaoMovimentacao(mov)} className="btn-editar">Editar</button>
+                                    <button onClick={() => handleExcluirMovimentacaoManual(mov.id)} className="btn-excluir">Excluir</button>
+                                  </>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );

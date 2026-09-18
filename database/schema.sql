@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   para VARCHAR(50),
   categoria VARCHAR(100),
   "contaPagarId" BIGINT,
+  -- Só uma sinalização visual (não gera lançamentos futuros automaticamente,
+  -- diferente da recorrência de Contas a Pagar).
+  recorrente BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
