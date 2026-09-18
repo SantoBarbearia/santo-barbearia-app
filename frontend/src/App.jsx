@@ -1280,14 +1280,49 @@ export default function App() {
     salvarDados({ contas: novasContas, movimentacoes: novasMovimentacoes });
   };
 
-  // Só uma sinalização visual pra ela reconhecer de relance quais lançamentos
-  // já feitos costumam se repetir (aluguel, internet, assinaturas...) — não
-  // gera lançamentos futuros automaticamente, diferente da recorrência de
-  // Contas a Pagar.
-  const handleAlternarRecorrenteMovimentacao = (id) => {
-    const novasMovimentacoes = movimentacoes.map(m => m.id === id ? { ...m, recorrente: !m.recorrente } : m);
+  // Marcar uma movimentação já lançada como recorrente cria a PRÓXIMA
+  // ocorrência como uma Conta a Pagar em aberto (mesmo vencimento um mês à
+  // frente) — dali em diante ela se repete sozinha do jeito que Contas a
+  // Pagar recorrentes já funcionam (a cada "Pagar", gera a seguinte).
+  // Desmarcar só tira a flag da movimentação; não mexe nas Contas a Pagar
+  // que já foram criadas a partir dela.
+  const handleAlternarRecorrenteMovimentacao = (mov) => {
+    if (mov.recorrente) {
+      const novasMovimentacoes = movimentacoes.map(m => m.id === mov.id ? { ...m, recorrente: false } : m);
+      setMovimentacoes(novasMovimentacoes);
+      salvarDados({ movimentacoes: novasMovimentacoes });
+      return;
+    }
+
+    const repeticoesStr = window.prompt(
+      `Marcar "${mov.descricao}" como recorrente vai criar uma Conta a Pagar em aberto pro próximo vencimento — dali em diante ela se repete sozinha, igual as outras contas recorrentes.\n\nDepois dessa próxima, repetir mais quantas vezes?`,
+      '11'
+    );
+    if (repeticoesStr === null) return;
+    const repeticoes = parseInt(repeticoesStr, 10) || 0;
+
+    const novasMovimentacoes = movimentacoes.map(m => m.id === mov.id ? { ...m, recorrente: true } : m);
+    const idNovaConta = Date.now();
+    const novaConta = {
+      id: idNovaConta,
+      data: new Date().toLocaleDateString('pt-BR'),
+      descricao: mov.descricao,
+      valor: mov.valor,
+      vencimento: proximoVencimento(formatarDataMovParaExibir(mov.data)),
+      status: 'Aberto',
+      conta: '',
+      categoria: mov.categoria || '',
+      recorrente: true,
+      grupoRecorrente: idNovaConta,
+      repeticoesRestantes: repeticoes
+    };
+    const novasContasAPagar = [...contasAPagar, novaConta];
+
     setMovimentacoes(novasMovimentacoes);
-    salvarDados({ movimentacoes: novasMovimentacoes });
+    setContasAPagar(novasContasAPagar);
+    salvarDados({ contasAPagar: novasContasAPagar, movimentacoes: novasMovimentacoes });
+
+    alert(`Criada uma Conta a Pagar recorrente pra "${mov.descricao}", vencendo em ${novaConta.vencimento}.`);
   };
 
   const handleAjustarSaldo = () => {
@@ -2229,7 +2264,7 @@ export default function App() {
                                   <input
                                     type="checkbox"
                                     checked={!!mov.recorrente}
-                                    onChange={() => handleAlternarRecorrenteMovimentacao(mov.id)}
+                                    onChange={() => handleAlternarRecorrenteMovimentacao(mov)}
                                   />
                                   Recorrente
                                 </label>
