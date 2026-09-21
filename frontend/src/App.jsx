@@ -389,25 +389,29 @@ export default function App() {
     return `${ano}-${mes}-${dia}`;
   };
 
-  const dentroDoPeriodo = (dataBR) => {
-    if (!periodoInicio && !periodoFim) return true;
-    const iso = dataBRparaISO(dataBR);
-    if (periodoInicio && iso < periodoInicio) return false;
-    if (periodoFim && iso > periodoFim) return false;
-    return true;
-  };
-
-  const contasAPagarFiltradas = contasAPagar.filter(c => dentroDoPeriodo(c.vencimento));
-
-  // A tabela movimentacoes tem datas guardadas em dois formatos diferentes
-  // dependendo de onde foram criadas (ISO yyyy-mm-dd ou BR dd/mm/yyyy) —
-  // esse helper normaliza os dois pra ISO antes de comparar com o filtro.
+  // A tabela movimentacoes (e, do mesmo jeito, vencimento/dataPagamento de
+  // contas_pagar) tem datas guardadas em dois formatos diferentes dependendo
+  // de onde foram criadas ou lidas: ISO yyyy-mm-dd (sempre que vem de uma
+  // coluna DATE do Supabase, mesmo quando foi salva como dd/mm/yyyy — o
+  // Postgres devolve DATE em ISO independente de como foi escrita) ou BR
+  // dd/mm/yyyy (o formato que o app grava e mostra) — esse helper normaliza
+  // os dois pra ISO antes de comparar/filtrar/ordenar.
   const dataMovParaISO = (data) => {
     if (!data) return '';
     if (/^\d{4}-\d{2}-\d{2}$/.test(data)) return data;
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return dataBRparaISO(data);
     return data;
   };
+
+  const dentroDoPeriodo = (data) => {
+    if (!periodoInicio && !periodoFim) return true;
+    const iso = dataMovParaISO(data);
+    if (periodoInicio && iso < periodoInicio) return false;
+    if (periodoFim && iso > periodoFim) return false;
+    return true;
+  };
+
+  const contasAPagarFiltradas = contasAPagar.filter(c => dentroDoPeriodo(c.vencimento));
 
   // O Supabase devolve colunas DATE sempre em ISO (yyyy-mm-dd), mesmo quando o
   // valor foi salvo como dd/mm/yyyy — então uma movimentação pode chegar em
@@ -437,7 +441,7 @@ export default function App() {
   };
 
   // Contas a Pagar dentro do período selecionado na Visão Geral (por vencimento)
-  const contasAPagarVG = contasAPagar.filter(c => dentroDoPeriodoVG(dataBRparaISO(c.vencimento)));
+  const contasAPagarVG = contasAPagar.filter(c => dentroDoPeriodoVG(dataMovParaISO(c.vencimento)));
   const abertasVG = contasAPagarVG.filter(c => c.status === 'Aberto');
   const totalAPagarVG = abertasVG.reduce((soma, c) => soma + c.valor, 0);
 
@@ -699,7 +703,7 @@ export default function App() {
       totalMeiPeriodo,
       blocosPorConta,
       contasAPagarLinhas: contasAPagarVG.map(c => ({
-        descricao: c.descricao, categoria: c.categoria || '', vencimento: c.vencimento,
+        descricao: c.descricao, categoria: c.categoria || '', vencimento: formatarDataMovParaExibir(c.vencimento),
         valor: c.valor, status: c.status, pagaCom: c.conta ? (nomesContas[c.conta] || '') : ''
       }))
     };
@@ -1226,7 +1230,7 @@ export default function App() {
         c.grupoRecorrente === conta.grupoRecorrente && c.status === 'Pago' && c.id !== conta.id
       );
       const consideradas = [conta, ...outrasPagas]
-        .sort((a, b) => new Date(dataBRparaISO(b.vencimento)) - new Date(dataBRparaISO(a.vencimento)))
+        .sort((a, b) => new Date(dataMovParaISO(b.vencimento)) - new Date(dataMovParaISO(a.vencimento)))
         .slice(0, 3);
       const mediaValor = Math.round((consideradas.reduce((soma, c) => soma + c.valor, 0) / consideradas.length) * 100) / 100;
 
@@ -1235,7 +1239,7 @@ export default function App() {
         data: new Date().toLocaleDateString('pt-BR'),
         descricao: conta.descricao,
         valor: mediaValor,
-        vencimento: proximoVencimento(conta.vencimento, conta.frequencia),
+        vencimento: proximoVencimento(formatarDataMovParaExibir(conta.vencimento), conta.frequencia),
         status: 'Aberto',
         conta: '',
         categoria: conta.categoria,
@@ -1302,26 +1306,27 @@ export default function App() {
   };
 
   const handleIniciarEdicaoConta = (conta) => {
-    // Se o vencimento salvo não estiver em dd/mm/yyyy (dado antigo/corrompido),
-    // deixa o campo em branco pra forçar escolher uma data válida, em vez de
-    // mandar pro <input type="date"> um valor tipo "undefined-undefined-2026".
-    const vencimentoValido = /^\d{2}\/\d{2}\/\d{4}$/.test(conta.vencimento || '');
-    const [dia, mes, ano] = vencimentoValido ? conta.vencimento.split('/') : ['', '', ''];
-    let dataPagamentoISO = '';
-    if (conta.dataPagamento) {
-      const [diaP, mesP, anoP] = conta.dataPagamento.split('/');
-      dataPagamentoISO = `${anoP}-${mesP}-${diaP}`;
-    }
+    // conta.vencimento/dataPagamento podem vir tanto em dd/mm/yyyy (o app
+    // grava assim) quanto em yyyy-mm-dd (o Supabase sempre devolve colunas
+    // DATE nesse formato depois de recarregar, não importa como foi salvo) —
+    // dataMovParaISO aceita os dois. Se não bater com nenhum formato válido
+    // (dado antigo/corrompido), deixa o campo em branco pra forçar escolher
+    // uma data válida, em vez de mandar pro <input type="date"> um valor tipo
+    // "undefined-undefined-2026".
+    const vencimentoISO = dataMovParaISO(conta.vencimento);
+    const vencimentoValido = /^\d{4}-\d{2}-\d{2}$/.test(vencimentoISO);
+    const dataPagamentoISO = conta.dataPagamento ? dataMovParaISO(conta.dataPagamento) : '';
+    const dataPagamentoValida = /^\d{4}-\d{2}-\d{2}$/.test(dataPagamentoISO);
     setEditandoContaId(conta.id);
     setContaEditando({
       descricao: conta.descricao,
       valor: conta.valor,
-      vencimento: vencimentoValido ? `${ano}-${mes}-${dia}` : '',
+      vencimento: vencimentoValido ? vencimentoISO : '',
       categoria: conta.categoria || '',
       recorrente: !!conta.recorrente,
       repeticoes: conta.repeticoesRestantes || '',
       frequencia: conta.frequencia || 'mensal',
-      dataPagamento: dataPagamentoISO
+      dataPagamento: dataPagamentoValida ? dataPagamentoISO : ''
     });
   };
 
@@ -1353,7 +1358,11 @@ export default function App() {
       ...(c.status === 'Pago' ? { dataPagamento: dataPagamentoBR } : {})
     } : c);
 
-    const precisaAtualizarMovimentacao = contaAtual?.status === 'Pago' && dataPagamentoBR && dataPagamentoBR !== contaAtual.dataPagamento;
+    // Compara pela data ISO (não pelo texto BR cru): contaAtual.dataPagamento
+    // pode ter vindo do Supabase em yyyy-mm-dd mesmo representando o mesmo dia
+    // que dataPagamentoBR — comparar os textos direto acusaria mudança (e
+    // reescreveria a movimentação) toda vez, mesmo sem ela ter alterado nada.
+    const precisaAtualizarMovimentacao = contaAtual?.status === 'Pago' && dataPagamentoBR && dataMovParaISO(dataPagamentoBR) !== dataMovParaISO(contaAtual.dataPagamento);
     const novasMovimentacoes = precisaAtualizarMovimentacao
       ? movimentacoes.map(m => m.contaPagarId === id ? { ...m, data: dataPagamentoBR } : m)
       : movimentacoes;
@@ -2333,7 +2342,7 @@ export default function App() {
                           {abertasVG.map(conta => (
                             <tr key={conta.id}>
                               <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
-                              <td>Vencimento: {conta.vencimento}</td>
+                              <td>Vencimento: {formatarDataMovParaExibir(conta.vencimento)}</td>
                               <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             </tr>
                           ))}
@@ -2716,7 +2725,7 @@ export default function App() {
                           {conta.descricao}
                           {conta.recorrente && <span className="badge-recorrente"> 🔁 {conta.repeticoesRestantes}x restantes ({conta.frequencia === 'semanal' ? 'semanal' : 'mensal'})</span>}
                         </p>
-                        <p className="venc">Vencimento: {conta.vencimento}</p>
+                        <p className="venc">Vencimento: {formatarDataMovParaExibir(conta.vencimento)}</p>
                         {conta.categoria && <p className="badge-categoria">{conta.categoria}</p>}
                       </div>
                       <p className="valor-conta">R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
@@ -2814,7 +2823,7 @@ export default function App() {
                             <td>{conta.descricao}{conta.categoria && <span className="badge-categoria"> {conta.categoria}</span>}</td>
                             <td>R$ {conta.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td>Pago com: {nomesContas[conta.conta] || '—'}</td>
-                            <td>Pago em: {conta.dataPagamento || conta.data}</td>
+                            <td>Pago em: {conta.dataPagamento ? formatarDataMovParaExibir(conta.dataPagamento) : conta.data}</td>
                             <td>
                               <button onClick={() => handleIniciarEdicaoConta(conta)} className="btn-editar">Editar</button>
                               <button onClick={() => handleDesfazerPagamento(conta.id)} className="btn-excluir">Desfazer</button>

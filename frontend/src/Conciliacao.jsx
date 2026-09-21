@@ -143,6 +143,52 @@ function chaveClienteValor(cliente, valor) {
   return `${normalizarNome(cliente)}|${(valor || 0).toFixed(2)}`;
 }
 
+// Chave estável pra lembrar que um item já foi ignorado ou já foi lançado —
+// NÃO pode usar o "id" do item porque ele é recriado do zero a cada upload
+// (ver comentário de chaveNaoIdentificado acima), então a mesma decisão
+// tomada antes (Ignorar, ou Lançar que já marca como ignorado) precisa ser
+// reconhecida de novo mesmo depois de recarregar a página ou reenviar os
+// mesmos relatórios — senão ela teria que refazer o mesmo trabalho toda vez
+// que parasse e voltasse pra continuar depois.
+// Código de Autorização (quando existe) é a chave mais confiável, porque não
+// se repete — usado pelas vendas sem comanda de um depósito, que não têm
+// descrição própria. Pro resto, cai pra descrição+valor+data, igual
+// foiLancadoAntes já faz pra detectar duplicata.
+function chaveIgnoravel(item) {
+  if (!item) return '';
+  if (item.codigoAutorizacao) {
+    const valorCodigo = item.valorBruto ?? item.valor ?? 0;
+    return `cod:${item.codigoAutorizacao}|${Number(valorCodigo).toFixed(2)}`;
+  }
+  const descricaoBase = item.descricao || item.cliente || '';
+  const valor = item.valor ?? item.valorBruto ?? item.valorLiquido ?? 0;
+  const data = item.data || item.dataVenda || (item.dataHora ? String(item.dataHora).slice(0, 10) : '') || '';
+  return `${normalizarParaConferirDuplicata(descricaoBase)}|${Number(valor).toFixed(2)}|${data}`;
+}
+
+const CHAVE_LOCALSTORAGE_IGNORADOS = 'sb_conciliacao_ignorados_v1';
+const CHAVE_LOCALSTORAGE_DIAS_TAXA = 'sb_conciliacao_dias_taxa_lancados_v1';
+
+// localStorage pode falhar (modo privado do navegador, cota cheia) — nesses
+// casos perde só a persistência entre sessões, sem quebrar a conciliação.
+function carregarSetPersistido(chave) {
+  try {
+    const bruto = localStorage.getItem(chave);
+    const arr = bruto ? JSON.parse(bruto) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function salvarSetPersistido(chave, set) {
+  try {
+    localStorage.setItem(chave, JSON.stringify([...set]));
+  } catch {
+    // Silenciosamente ignora — ver comentário acima.
+  }
+}
+
 export default function Conciliacao({ contasAPagar, movimentacoes, categorias, onLancarMovimentacao, onLancarVariasNaContaCorrente, onLancarCaixa, onCriarContaTaxaMaquininha, onCriarContasTaxaMaquininhaPorDia, onDividirLancamento, onLancarFaturamentoBruto, pagamentosNaoIdentificados, onMarcarNaoIdentificado, onRemoverNaoIdentificado, resgatesCashBarberPendentes, onRegistrarPendentesResgate, resgatesCashBarberLancados, onLancarResgateCashBarber }) {
   const [fontes, setFontes] = useState({
     extrato: { ...FONTE_VAZIA },
@@ -155,7 +201,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const [mapeando, setMapeando] = useState(null);
   const [mapeamentoForm, setMapeamentoForm] = useState({ temCabecalho: true, colData: '0', colDescricao: '1', colValor: '2' });
   const [resultado, setResultado] = useState(null);
-  const [ignorados, setIgnorados] = useState(new Set());
+  const [ignorados, setIgnorados] = useState(() => carregarSetPersistido(CHAVE_LOCALSTORAGE_IGNORADOS));
   const [categoriaPorLinha, setCategoriaPorLinha] = useState({});
   const [dividindo, setDividindo] = useState(null);
   const [partesDivisao, setPartesDivisao] = useState([]);
@@ -219,7 +265,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     );
   };
   const [taxaJaLancada, setTaxaJaLancada] = useState(false);
-  const [diasTaxaLancados, setDiasTaxaLancados] = useState(new Set());
+  const [diasTaxaLancados, setDiasTaxaLancados] = useState(() => carregarSetPersistido(CHAVE_LOCALSTORAGE_DIAS_TAXA));
 
   const atualizarFonte = (chave, patch) => {
     setFontes((f) => ({ ...f, [chave]: { ...f[chave], ...patch } }));
@@ -406,10 +452,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
         // vencimento original — uma conta paga fora do prazo (antes ou
         // depois) não batia com a linha do extrato porque a data usada era
         // a errada, mesmo o valor e o pagamento sendo exatamente os mesmos.
-        const [dia, mes, ano] = (c.dataPagamento || c.vencimento).split('/');
+        // paraDataISO aceita tanto dd/mm/yyyy (formato que o app grava) quanto
+        // yyyy-mm-dd (formato que o Supabase devolve pra colunas DATE depois
+        // de um reload) — um .split('/') cru aqui quebrava silenciosamente
+        // toda vez que a conta vinha de uma releitura, porque uma data ISO
+        // não tem "/" nenhuma pra separar.
         return {
           id: `pago-${c.id}`,
-          data: `${ano}-${mes}-${dia}`,
+          data: paraDataISO(c.dataPagamento || c.vencimento),
           descricao: c.descricao,
           valor: c.valor,
           tipo: 'saida'
@@ -671,16 +721,24 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
       vendasDeArquivoSeparado,
       composicaoDepositos
     });
-    setIgnorados(new Set());
+    // Restaura do localStorage (não zera) — senão o que ela já ignorou ou já
+    // lançou numa conciliação anterior desse mesmo período voltaria a
+    // aparecer como pendente só por ter clicado em "Conciliar" de novo.
+    setIgnorados(carregarSetPersistido(CHAVE_LOCALSTORAGE_IGNORADOS));
     setTaxaJaLancada(false);
-    setDiasTaxaLancados(new Set());
+    setDiasTaxaLancados(carregarSetPersistido(CHAVE_LOCALSTORAGE_DIAS_TAXA));
     setSelecionadosFaturamento(new Set());
     setSelecionadosResgate(new Set());
     setCasamentoManual(null);
   };
 
-  const marcarIgnorado = (id) => {
-    setIgnorados((s) => new Set(s).add(id));
+  const marcarIgnorado = (item) => {
+    const chave = chaveIgnoravel(item);
+    setIgnorados((s) => {
+      const novo = new Set(s).add(chave);
+      salvarSetPersistido(CHAVE_LOCALSTORAGE_IGNORADOS, novo);
+      return novo;
+    });
   };
 
   // Olha os lançamentos já classificados anteriormente com uma descrição
@@ -704,21 +762,21 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const lancarMovimentacao = (linha) => {
     const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? (linha.tipo === 'entrada' ? CATEGORIA_PADRAO_RECEBIMENTO : '');
     onLancarMovimentacao({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
-    marcarIgnorado(linha.id);
+    marcarIgnorado(linha);
   };
 
   const lancarNoCaixa = (linha) => {
     if (linha.possivelDuplicata && !window.confirm('Já existe um lançamento no Caixa muito parecido com esse (mesmo valor e descrição) — pode já ter sido lançado numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoriaPadrao = sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarCaixa({ ...linha, categoria: categoriaPorLinha[linha.id] ?? categoriaPadrao });
-    marcarIgnorado(linha.id);
+    marcarIgnorado(linha);
   };
 
   const lancarFaturamentoBruto = (linha) => {
     if (linha.possivelDuplicata && !window.confirm('Já existe uma Receita muito parecida com essa comanda (mesmo valor e descrição) na Conta Corrente — pode já ter sido lançada numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoria = categoriaPorLinha[linha.id] ?? sugerirCategoriaPorHistorico(linha.descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarFaturamentoBruto([{ ...linha, categoria }]);
-    marcarIgnorado(linha.id);
+    marcarIgnorado(linha);
   };
 
   // Uma venda que passou na maquininha mas não tem comanda no Sistema nunca
@@ -733,11 +791,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     if (item.possivelDuplicata && !window.confirm('Já existe uma Receita muito parecida com essa venda (mesmo valor e descrição) na Conta Corrente — pode já ter sido lançada numa conciliação anterior. Lançar mesmo assim?')) return;
     const categoria = sugerirCategoriaPorHistorico(descricao) ?? CATEGORIA_PADRAO_RECEBIMENTO;
     onLancarMovimentacao({ data: deposito.data, tipo: 'entrada', descricao, valor: item.valorBruto, categoria });
-    marcarIgnorado(item.id);
+    marcarIgnorado(item);
   };
 
   const lancarTodasVendasSemComandaDoDeposito = (deposito) => {
-    const semComanda = deposito.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(item.id));
+    const semComanda = deposito.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(chaveIgnoravel(item)));
     const pendentes = semComanda.filter((item) => !item.possivelDuplicata);
     const duplicatas = semComanda.filter((item) => item.possivelDuplicata);
     if (pendentes.length === 0) {
@@ -758,7 +816,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     onLancarVariasNaContaCorrente(linhas);
     setIgnorados((s) => {
       const novo = new Set(s);
-      pendentes.forEach((item) => novo.add(item.id));
+      pendentes.forEach((item) => novo.add(chaveIgnoravel(item)));
+      salvarSetPersistido(CHAVE_LOCALSTORAGE_IGNORADOS, novo);
       return novo;
     });
     if (duplicatas.length > 0) {
@@ -791,7 +850,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const lancarTodoFaturamentoBruto = (apenasConfirmadas = false) => {
     const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
     const todasVisiveis = (resultado.faturamentoBrutoSistema || []).filter((l) =>
-      !ignorados.has(l.id) &&
+      !ignorados.has(chaveIgnoravel(l)) &&
       !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)) &&
       !chavesResgateConhecidas.has(chaveClienteValor(l.cliente, l.valorBruto))
     );
@@ -810,7 +869,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     onLancarFaturamentoBruto(linhasComCategoria);
     setIgnorados((s) => {
       const novo = new Set(s);
-      visiveis.forEach((l) => novo.add(l.id));
+      visiveis.forEach((l) => novo.add(chaveIgnoravel(l)));
+      salvarSetPersistido(CHAVE_LOCALSTORAGE_IGNORADOS, novo);
       return novo;
     });
     if (duplicatas.length > 0) {
@@ -821,7 +881,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   const criarContaTaxaDiaria = (dia) => {
     if (dia.possivelDuplicata && !window.confirm('Já existe um débito de "Taxas da Maquininha" nesse mesmo dia e valor na Conta Corrente — pode já ter sido lançado numa conciliação anterior. Lançar mesmo assim?')) return;
     onCriarContasTaxaMaquininhaPorDia([dia]);
-    setDiasTaxaLancados((s) => new Set(s).add(dia.data));
+    setDiasTaxaLancados((s) => {
+      const novo = new Set(s).add(dia.data);
+      salvarSetPersistido(CHAVE_LOCALSTORAGE_DIAS_TAXA, novo);
+      return novo;
+    });
   };
 
   const criarTodasContasTaxaDiarias = () => {
@@ -835,6 +899,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     setDiasTaxaLancados((s) => {
       const novo = new Set(s);
       pendentes.forEach((d) => novo.add(d.data));
+      salvarSetPersistido(CHAVE_LOCALSTORAGE_DIAS_TAXA, novo);
       return novo;
     });
     if (duplicatas.length > 0) {
@@ -906,7 +971,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   // um só do extrato. Aqui a Fernanda escolhe manualmente quais comandas
   // formam esse pagamento; a gente soma e tenta confirmar contra o extrato.
   const agruparEConfirmarFaturamento = () => {
-    const linhas = (resultado.faturamentoBrutoSistema || []).filter((l) => selecionadosFaturamento.has(l.id) && !ignorados.has(l.id));
+    const linhas = (resultado.faturamentoBrutoSistema || []).filter((l) => selecionadosFaturamento.has(l.id) && !ignorados.has(chaveIgnoravel(l)));
     if (linhas.length < 2) return;
     const somaBruto = Math.round(linhas.reduce((s, l) => s + l.valorBruto, 0) * 100) / 100;
     // Pix cai como uma entrada própria no extrato — bate aí. Cartão não: o
@@ -1172,7 +1237,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const totalCentavos = Math.round(linha.valor * 100);
     if (somaCentavos !== totalCentavos || partes.some((p) => !(p.valor > 0) || !p.categoria)) return;
     onDividirLancamento(linha, partes);
-    marcarIgnorado(linha.id);
+    marcarIgnorado(linha);
     cancelarDivisao();
   };
 
@@ -1292,7 +1357,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderDivergencias = (titulo, lista, origemLabel, permitirCasarComSistema = false) => {
-    const visiveis = ordenarPorDataHora(lista.filter((l) => !ignorados.has(l.id)));
+    const visiveis = ordenarPorDataHora(lista.filter((l) => !ignorados.has(chaveIgnoravel(l))));
     if (visiveis.length === 0) return null;
     return (
       <div>
@@ -1323,11 +1388,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                   )}
                 </>
               )}
-              <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
+              <button onClick={() => marcarIgnorado(l)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'extrato' && casamentoManual.id === l.id &&
               (() => {
-                const todos = ordenarPorDataHora((resultado.faturamentoBrutoSistema || []).filter((c) => !ignorados.has(c.id)));
+                const todos = ordenarPorDataHora((resultado.faturamentoBrutoSistema || []).filter((c) => !ignorados.has(chaveIgnoravel(c))));
                 const visiveis = mostrarJaCasados ? todos : todos.filter((c) => !c.confirmadoNoBanco);
                 const ocultos = todos.length - visiveis.length;
                 return renderPainelCasamentoManual(l.valor, l.descricao, visiveis, ocultos);
@@ -1396,7 +1461,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const chavesNaoIdentificadas = new Set((pagamentosNaoIdentificados || []).map((p) => p.chave));
     const visiveis = ordenarPorDataHora(
       (resultado.faturamentoBrutoSistema || []).filter((l) =>
-        !ignorados.has(l.id) &&
+        !ignorados.has(chaveIgnoravel(l)) &&
         !chavesNaoIdentificadas.has(chaveNaoIdentificado(l)) &&
         !chavesResgateConhecidas.has(chaveClienteValor(l.cliente, l.valorBruto))
       )
@@ -1503,7 +1568,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                   <button onClick={() => onMarcarNaoIdentificado(l)} className="btn-editar">Pagamento Não Identificado</button>
                 </>
               )}
-              <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
+              <button onClick={() => marcarIgnorado(l)} className="btn-editar">Ignorar</button>
             </div>
             {casamentoManual?.lado === 'comanda' && casamentoManual.id === l.id &&
               (() => {
@@ -1515,13 +1580,13 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 // inteiro agrupado), então usa as vendas da maquininha.
                 const todos = casamentoManual.pool === 'cartao'
                   ? (resultado.vendasCartao?.todas || [])
-                      .filter((v) => !ignorados.has(v.id))
+                      .filter((v) => !ignorados.has(chaveIgnoravel(v)))
                       .map((v) => ({
                         ...v,
                         usadoPorSistemaId: (resultado.paresCartaoVendaSistema || []).find((p) => p.vendaId === v.id)?.sistemaId || null
                       }))
                   : (fontes.extrato.linhas || [])
-                      .filter((e) => e.tipo === 'entrada' && !ignorados.has(e.id))
+                      .filter((e) => e.tipo === 'entrada' && !ignorados.has(chaveIgnoravel(e)))
                       .map((e) => ({ ...e, usadoPorSistemaId: (resultado.paresPixExtratoSistema || []).find((p) => p.extratoId === e.id)?.sistemaId || null }));
                 const todosOrdenados = ordenarPorDataHora(todos);
                 const visiveis = mostrarJaCasados ? todosOrdenados : todosOrdenados.filter((e) => !e.usadoPorSistemaId);
@@ -1599,7 +1664,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
   };
 
   const renderRecebimentosDinheiro = () => {
-    const visiveis = ordenarPorDataHora((resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(l.id)));
+    const visiveis = ordenarPorDataHora((resultado.recebimentosDinheiro || []).filter((l) => !ignorados.has(chaveIgnoravel(l))));
     if (visiveis.length === 0) return null;
     return (
       <div className="card">
@@ -1628,7 +1693,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 onChange={(valor) => setCategoriaPorLinha((c) => ({ ...c, [l.id]: valor }))}
               />
               <button onClick={() => lancarNoCaixa(l)} className="btn-pagar">Lançar no Caixa</button>
-              <button onClick={() => marcarIgnorado(l.id)} className="btn-editar">Ignorar</button>
+              <button onClick={() => marcarIgnorado(l)} className="btn-editar">Ignorar</button>
             </div>
           </div>
         ))}
@@ -1720,10 +1785,10 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               {renderDivergencias('No Sistema mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaSistema, 'Sistema')}
               {renderDivergencias('Na Maquininha mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaMaquininha, 'Maquininha')}
               {renderDivergencias('Lançado manualmente no app mas não achado no extrato:', resultado.recebimentos.semCorrespondenciaManual, 'Lançamento Manual')}
-              {resultado.recebimentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.recebimentos.semCorrespondenciaSistema.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.recebimentos.semCorrespondenciaMaquininha.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.recebimentos.semCorrespondenciaManual.filter(l => !ignorados.has(l.id)).length === 0 && (
+              {resultado.recebimentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                resultado.recebimentos.semCorrespondenciaSistema.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                resultado.recebimentos.semCorrespondenciaMaquininha.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                resultado.recebimentos.semCorrespondenciaManual.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 && (
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
@@ -1753,9 +1818,9 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               {renderDivergencias('Saídas no extrato sem conta paga correspondente:', resultado.pagamentos.semCorrespondenciaExtrato, 'Extrato')}
               {renderDivergencias('Marcado como pago no app mas não achado no extrato:', resultado.pagamentos.semCorrespondenciaApp, 'Contas a Pagar')}
               {renderDivergencias('Lançado manualmente no app mas não achado no extrato:', resultado.pagamentos.semCorrespondenciaManual, 'Lançamento Manual')}
-              {resultado.pagamentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.pagamentos.semCorrespondenciaApp.filter(l => !ignorados.has(l.id)).length === 0 &&
-                resultado.pagamentos.semCorrespondenciaManual.filter(l => !ignorados.has(l.id)).length === 0 && (
+              {resultado.pagamentos.semCorrespondenciaExtrato.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                resultado.pagamentos.semCorrespondenciaApp.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                resultado.pagamentos.semCorrespondenciaManual.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 && (
                 <p>✅ Tudo conciliado.</p>
               )}
             </div>
@@ -1778,8 +1843,8 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               <div style={{ marginTop: 15 }}>
                 {renderDivergencias('Vendas no cartão sem comanda correspondente no sistema:', resultado.vendasCartao.semCorrespondenciaVendas, 'Maquininha')}
                 {renderDivergencias('Comanda paga no cartão sem venda correspondente na maquininha:', resultado.vendasCartao.semCorrespondenciaSistema, 'Sistema')}
-                {resultado.vendasCartao.semCorrespondenciaVendas.filter(l => !ignorados.has(l.id)).length === 0 &&
-                  resultado.vendasCartao.semCorrespondenciaSistema.filter(l => !ignorados.has(l.id)).length === 0 && (
+                {resultado.vendasCartao.semCorrespondenciaVendas.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 &&
+                  resultado.vendasCartao.semCorrespondenciaSistema.filter(l => !ignorados.has(chaveIgnoravel(l))).length === 0 && (
                   <p>✅ Tudo conciliado.</p>
                 )}
               </div>
@@ -1803,14 +1868,14 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                 </div>
                 <div className="resumo-item">
                   <p>Sem correspondência</p>
-                  <p className="valor-resumo">{resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).length}</p>
+                  <p className="valor-resumo">{resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(chaveIgnoravel(v))).length}</p>
                 </div>
               </div>
               <div style={{ marginTop: 15 }}>
-                {resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id)).length === 0 ? (
+                {resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(chaveIgnoravel(v))).length === 0 ? (
                   <p>✅ Todas as vendas bateram com o relatório de Pagamentos.</p>
                 ) : (
-                  ordenarPorDataHora(resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(v.id))).map((v) => (
+                  ordenarPorDataHora(resultado.vendasComPagamento.filter((v) => !v.encontradoEmPagamentos && !ignorados.has(chaveIgnoravel(v)))).map((v) => (
                     <div key={v.id} className="divergencia-item divergencia-entrada">
                       <div className="info-conta">
                         <p className="desc">{v.descricao}</p>
@@ -1824,7 +1889,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                         <button onClick={() => iniciarCasamentoDeVenda(v.id)} className="btn-editar">
                           {casamentoManual?.lado === 'venda' && casamentoManual.id === v.id ? 'Cancelar Casamento' : 'Casar com Pagamentos'}
                         </button>
-                        <button onClick={() => marcarIgnorado(v.id)} className="btn-editar">Ignorar</button>
+                        <button onClick={() => marcarIgnorado(v)} className="btn-editar">Ignorar</button>
                       </div>
                       {casamentoManual?.lado === 'venda' && casamentoManual.id === v.id &&
                         (() => {
@@ -1834,7 +1899,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                               .map((x) => x.codigoAutorizacao)
                           );
                           const candidatos = (fontes.maquininha.pagamentosDetalhado || [])
-                            .filter((p) => !ignorados.has(p.id) && !codigosUsados.has(p.codigoAutorizacao))
+                            .filter((p) => !ignorados.has(chaveIgnoravel(p)) && !codigosUsados.has(p.codigoAutorizacao))
                             .map((p) => ({ ...p, descricao: `Pagamento ${p.bandeira || ''} — Cód. ${p.codigoAutorizacao}`.trim() }));
                           return renderPainelCasamentoManual(v.valor, v.descricao, candidatos);
                         })()}
@@ -1917,7 +1982,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
               </p>
               {resultado.composicaoDepositos.map((d) => {
                 const aberto = depositosExpandidos.has(d.id);
-                const semComanda = d.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(item.id));
+                const semComanda = d.itens.filter((item) => !item.comandaEncontrada && !ignorados.has(chaveIgnoravel(item)));
                 return (
                   <div key={d.id} style={{ marginBottom: 10 }}>
                     <div className="divergencia-item divergencia-entrada">
@@ -1979,7 +2044,7 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
                               <td>
                                 {item.comandaEncontrada ? (
                                   <span style={{ color: '#27ae60' }}>✓ {item.comandaEncontrada}</span>
-                                ) : ignorados.has(item.id) ? (
+                                ) : ignorados.has(chaveIgnoravel(item)) ? (
                                   <span style={{ color: '#27ae60' }}>✓ Lançada como Receita</span>
                                 ) : (
                                   <>
