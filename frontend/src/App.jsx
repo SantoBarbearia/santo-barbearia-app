@@ -121,9 +121,9 @@ export default function App() {
   });
 
   const [movimentacoes, setMovimentacoes] = useState([]);
-  const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
+  const [novaConta, setNovaConta] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', frequencia: 'mensal' });
   const [editandoContaId, setEditandoContaId] = useState(null);
-  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '' });
+  const [contaEditando, setContaEditando] = useState({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '', frequencia: 'mensal' });
   const [transferencia, setTransferencia] = useState({
     de: 'caixa',
     para: 'sicredi',
@@ -1190,13 +1190,15 @@ export default function App() {
   // gerar um vencimento tipo "undefined/undefined/2026" que o Supabase
   // rejeita — e trava até o salvamento de outras contas, já que todas são
   // reenviadas juntas.
-  const proximoVencimento = (dataBR) => {
+  const proximoVencimento = (dataBR, frequencia = 'mensal') => {
     const partes = /^\d{2}\/\d{2}\/\d{4}$/.test(dataBR || '') ? dataBR.split('/').map(Number) : null;
     const [dia, mes, ano] = partes || (() => {
       const hoje = new Date();
       return [hoje.getDate(), hoje.getMonth() + 1, hoje.getFullYear()];
     })();
-    const d = new Date(ano, mes - 1 + 1, dia);
+    const d = frequencia === 'semanal'
+      ? new Date(ano, mes - 1, dia + 7)
+      : new Date(ano, mes - 1 + 1, dia);
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   };
 
@@ -1233,11 +1235,12 @@ export default function App() {
         data: new Date().toLocaleDateString('pt-BR'),
         descricao: conta.descricao,
         valor: mediaValor,
-        vencimento: proximoVencimento(conta.vencimento),
+        vencimento: proximoVencimento(conta.vencimento, conta.frequencia),
         status: 'Aberto',
         conta: '',
         categoria: conta.categoria,
         recorrente: true,
+        frequencia: conta.frequencia || 'mensal',
         grupoRecorrente: conta.grupoRecorrente,
         repeticoesRestantes: conta.repeticoesRestantes - 1
       };
@@ -1286,13 +1289,14 @@ export default function App() {
       conta: '',
       categoria: novaConta.categoria,
       recorrente,
+      frequencia: recorrente ? novaConta.frequencia : 'mensal',
       grupoRecorrente: recorrente ? id : null,
       repeticoesRestantes: recorrente ? (parseInt(novaConta.repeticoes, 10) || 0) : 0
     };
 
     const novasContasAPagar = [...contasAPagar, conta];
     setContasAPagar(novasContasAPagar);
-    setNovaConta({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '' });
+    setNovaConta({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', frequencia: 'mensal' });
 
     salvarDados({ contas, contasAPagar: novasContasAPagar, comissoes, movimentacoes });
   };
@@ -1316,13 +1320,14 @@ export default function App() {
       categoria: conta.categoria || '',
       recorrente: !!conta.recorrente,
       repeticoes: conta.repeticoesRestantes || '',
+      frequencia: conta.frequencia || 'mensal',
       dataPagamento: dataPagamentoISO
     });
   };
 
   const handleCancelarEdicaoConta = () => {
     setEditandoContaId(null);
-    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '' });
+    setContaEditando({ descricao: '', valor: '', vencimento: '', categoria: '', recorrente: false, repeticoes: '', dataPagamento: '', frequencia: 'mensal' });
   };
 
   const handleSalvarEdicaoConta = (id) => {
@@ -1342,6 +1347,7 @@ export default function App() {
       vencimento: `${dia}/${mes}/${ano}`,
       categoria: contaEditando.categoria,
       recorrente,
+      frequencia: recorrente ? contaEditando.frequencia : 'mensal',
       grupoRecorrente: recorrente ? (c.grupoRecorrente || c.id) : c.grupoRecorrente,
       repeticoesRestantes: recorrente ? (parseInt(contaEditando.repeticoes, 10) || 0) : 0,
       ...(c.status === 'Pago' ? { dataPagamento: dataPagamentoBR } : {})
@@ -1481,10 +1487,11 @@ export default function App() {
       return;
     }
 
-    const repeticoesStr = window.prompt(
-      `Marcar "${mov.descricao}" como recorrente vai criar uma Conta a Pagar em aberto pro próximo vencimento — dali em diante ela se repete sozinha, igual as outras contas recorrentes.\n\nDepois dessa próxima, repetir mais quantas vezes?`,
-      '11'
+    const ehSemanal = window.confirm(
+      `Marcar "${mov.descricao}" como recorrente vai criar uma Conta a Pagar em aberto pro próximo vencimento — dali em diante ela se repete sozinha, igual as outras contas recorrentes.\n\nEssa conta se repete toda SEMANA?\n\nOK = toda semana. Cancelar = todo mês.`
     );
+    const frequencia = ehSemanal ? 'semanal' : 'mensal';
+    const repeticoesStr = window.prompt('Depois dessa próxima, repetir mais quantas vezes?', '11');
     if (repeticoesStr === null) return;
     const repeticoes = parseInt(repeticoesStr, 10) || 0;
 
@@ -1495,11 +1502,12 @@ export default function App() {
       data: new Date().toLocaleDateString('pt-BR'),
       descricao: mov.descricao,
       valor: mov.valor,
-      vencimento: proximoVencimento(formatarDataMovParaExibir(mov.data)),
+      vencimento: proximoVencimento(formatarDataMovParaExibir(mov.data), frequencia),
       status: 'Aberto',
       conta: '',
       categoria: mov.categoria || '',
       recorrente: true,
+      frequencia,
       grupoRecorrente: idNovaConta,
       repeticoesRestantes: repeticoes
     };
@@ -2572,6 +2580,14 @@ export default function App() {
                       /> Conta recorrente
                     </label>
                     {novaConta.recorrente && (
+                      <>
+                      <select
+                        value={novaConta.frequencia}
+                        onChange={(e) => setNovaConta({ ...novaConta, frequencia: e.target.value })}
+                      >
+                        <option value="mensal">Mensal</option>
+                        <option value="semanal">Semanal</option>
+                      </select>
                       <input
                         type="number"
                         min="1"
@@ -2579,6 +2595,7 @@ export default function App() {
                         onChange={(e) => setNovaConta({ ...novaConta, repeticoes: e.target.value })}
                         placeholder="Repetir mais quantas vezes"
                       />
+                      </>
                     )}
                   </div>
                   <button
@@ -2668,6 +2685,14 @@ export default function App() {
                             /> Conta recorrente
                           </label>
                           {contaEditando.recorrente && (
+                            <>
+                            <select
+                              value={contaEditando.frequencia}
+                              onChange={(e) => setContaEditando({ ...contaEditando, frequencia: e.target.value })}
+                            >
+                              <option value="mensal">Mensal</option>
+                              <option value="semanal">Semanal</option>
+                            </select>
                             <input
                               type="number"
                               min="1"
@@ -2675,6 +2700,7 @@ export default function App() {
                               onChange={(e) => setContaEditando({ ...contaEditando, repeticoes: e.target.value })}
                               placeholder="Repetições restantes"
                             />
+                            </>
                           )}
                         </div>
                       </div>
@@ -2688,7 +2714,7 @@ export default function App() {
                       <div className="info-conta">
                         <p className="desc">
                           {conta.descricao}
-                          {conta.recorrente && <span className="badge-recorrente"> 🔁 {conta.repeticoesRestantes}x restantes</span>}
+                          {conta.recorrente && <span className="badge-recorrente"> 🔁 {conta.repeticoesRestantes}x restantes ({conta.frequencia === 'semanal' ? 'semanal' : 'mensal'})</span>}
                         </p>
                         <p className="venc">Vencimento: {conta.vencimento}</p>
                         {conta.categoria && <p className="badge-categoria">{conta.categoria}</p>}

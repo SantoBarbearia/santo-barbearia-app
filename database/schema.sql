@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS contas_pagar (
   conta VARCHAR(50),
   categoria VARCHAR(100),
   recorrente BOOLEAN DEFAULT FALSE,
+  frequencia VARCHAR(20) DEFAULT 'mensal',
   "grupoRecorrente" BIGINT,
   "repeticoesRestantes" INTEGER DEFAULT 0,
   "dataPagamento" DATE,
