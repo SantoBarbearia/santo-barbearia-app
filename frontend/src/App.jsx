@@ -1185,8 +1185,17 @@ export default function App() {
     doc.save(`relatorio-santo-barbearia-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
+  // Se a data recebida não estiver em dd/mm/yyyy (ex: veio de uma
+  // movimentação cuja data não deu pra reconhecer), cai pra hoje em vez de
+  // gerar um vencimento tipo "undefined/undefined/2026" que o Supabase
+  // rejeita — e trava até o salvamento de outras contas, já que todas são
+  // reenviadas juntas.
   const proximoVencimento = (dataBR) => {
-    const [dia, mes, ano] = dataBR.split('/').map(Number);
+    const partes = /^\d{2}\/\d{2}\/\d{4}$/.test(dataBR || '') ? dataBR.split('/').map(Number) : null;
+    const [dia, mes, ano] = partes || (() => {
+      const hoje = new Date();
+      return [hoje.getDate(), hoje.getMonth() + 1, hoje.getFullYear()];
+    })();
     const d = new Date(ano, mes - 1 + 1, dia);
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   };
@@ -1289,7 +1298,11 @@ export default function App() {
   };
 
   const handleIniciarEdicaoConta = (conta) => {
-    const [dia, mes, ano] = conta.vencimento.split('/');
+    // Se o vencimento salvo não estiver em dd/mm/yyyy (dado antigo/corrompido),
+    // deixa o campo em branco pra forçar escolher uma data válida, em vez de
+    // mandar pro <input type="date"> um valor tipo "undefined-undefined-2026".
+    const vencimentoValido = /^\d{2}\/\d{2}\/\d{4}$/.test(conta.vencimento || '');
+    const [dia, mes, ano] = vencimentoValido ? conta.vencimento.split('/') : ['', '', ''];
     let dataPagamentoISO = '';
     if (conta.dataPagamento) {
       const [diaP, mesP, anoP] = conta.dataPagamento.split('/');
@@ -1299,7 +1312,7 @@ export default function App() {
     setContaEditando({
       descricao: conta.descricao,
       valor: conta.valor,
-      vencimento: `${ano}-${mes}-${dia}`,
+      vencimento: vencimentoValido ? `${ano}-${mes}-${dia}` : '',
       categoria: conta.categoria || '',
       recorrente: !!conta.recorrente,
       repeticoes: conta.repeticoesRestantes || '',
