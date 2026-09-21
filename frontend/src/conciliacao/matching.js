@@ -51,15 +51,25 @@ function similaridadeNomes(nomeA, nomeB) {
   return comuns / Math.min(palavrasA.length, palavrasB.size);
 }
 
-// Casa cada item de listaA com o melhor candidato em listaB: mesmo valor,
-// dentro da tolerância de dias, priorizando primeiro quem tem o nome mais
-// parecido (útil em Pix, onde o extrato e a comanda costumam trazer o nome
-// de quem pagou) e depois quem tem o horário mais próximo (útil em cartão,
-// onde a comanda fechada e a venda na maquininha costumam ter o horário bem
-// parecido) — sem isso, duas comandas/vendas de mesmo valor no mesmo dia
-// podiam ser trocadas entre si só por sorte de ordenação. Quando nenhum dos
-// dois lados tem nome ou horário reconhecível, o desempate cai de volta pra
-// data mais próxima, exatamente como antes.
+// Casa os itens de listaA com os de listaB: mesmo valor, dentro da
+// tolerância de dias, priorizando primeiro quem tem o nome mais parecido
+// (útil em Pix, onde o extrato e a comanda costumam trazer o nome de quem
+// pagou) e depois quem tem o horário mais próximo (útil em cartão, onde a
+// comanda fechada e a venda na maquininha costumam ter o horário bem
+// parecido). Quando nenhum dos dois lados tem nome ou horário reconhecível,
+// o desempate cai de volta pra data mais próxima, exatamente como antes.
+//
+// Os pares são escolhidos GLOBALMENTE pelo melhor casamento primeiro (maior
+// similaridade, depois menor diferença de minutos), não item por item na
+// ordem de listaA. Isso importa porque duas comandas de mesmo valor no mesmo
+// dia (ex: dois cortes de R$13,50) podiam antes deixar a comanda processada
+// primeiro "roubar" a venda mais próxima em horário de uma comanda processada
+// depois, mesmo quando essa segunda comanda era o casamento certo e a
+// primeira tinha uma venda melhor disponível — sobrando as duas sem
+// correspondência pra casar manualmente por causa só da ordem de
+// processamento. Escolhendo o melhor par entre TODOS os candidatos possíveis
+// primeiro, cada lado fica livre pra pegar o par mais próximo dele quando
+// existir mais de um candidato de mesmo valor.
 //
 // Com opcoes.exigirNome, um casamento só é confirmado automaticamente se
 // tiver algum sinal de nome batendo (similaridade > 0) — sem isso, cai pra
@@ -77,35 +87,46 @@ function similaridadeNomes(nomeA, nomeB) {
 // (não bloqueia por falta de dado).
 export function conciliar(listaA, listaB, toleranciaDias = 3, opcoes = {}) {
   const { exigirNome = false, compativel = null } = opcoes;
-  const usadosB = new Set();
-  const pares = [];
-  const semParA = [];
 
-  listaA.forEach((a) => {
+  // Monta todo candidato (a, b) válido por valor+data+compativel, com o
+  // "escore" de desempate (similaridade de nome, depois minutos de
+  // diferença) — sem escolher nada ainda.
+  const candidatos = [];
+  listaA.forEach((a, indiceA) => {
     const nomeA = extrairNomeDaDescricao(a.descricao);
-    let melhor = null;
-    listaB.forEach((b) => {
-      if (usadosB.has(b.id)) return;
+    listaB.forEach((b, indiceB) => {
       if (Math.abs(a.valor - b.valor) > 0.01) return;
       const dias = diasEntre(a.data, b.data);
       if (dias > toleranciaDias) return;
       if (compativel && !compativel(a, b)) return;
       const similaridade = similaridadeNomes(nomeA, extrairNomeDaDescricao(b.descricao));
+      if (exigirNome && similaridade === 0) return;
       const minutos = minutosEntre(a, b);
-      if (!melhor ||
-          similaridade > melhor.similaridade ||
-          (similaridade === melhor.similaridade && minutos < melhor.minutos)) {
-        melhor = { b, dias, similaridade, minutos };
-      }
+      candidatos.push({ indiceA, indiceB, a, b, similaridade, minutos });
     });
-    if (melhor && (!exigirNome || melhor.similaridade > 0)) {
-      pares.push({ a, b: melhor.b });
-      usadosB.add(melhor.b.id);
-    } else {
-      semParA.push(a);
-    }
   });
 
-  const semParB = listaB.filter((b) => !usadosB.has(b.id));
+  // Melhor candidato primeiro (maior similaridade, depois menor diferença de
+  // minutos) — em caso de empate total, mantém a ordem original (estável)
+  // pra não introduzir aleatoriedade.
+  candidatos.sort((x, y) =>
+    y.similaridade - x.similaridade ||
+    x.minutos - y.minutos ||
+    x.indiceA - y.indiceA ||
+    x.indiceB - y.indiceB
+  );
+
+  const usadosA = new Set();
+  const usadosB = new Set();
+  const pares = [];
+  candidatos.forEach((c) => {
+    if (usadosA.has(c.indiceA) || usadosB.has(c.indiceB)) return;
+    usadosA.add(c.indiceA);
+    usadosB.add(c.indiceB);
+    pares.push({ a: c.a, b: c.b });
+  });
+
+  const semParA = listaA.filter((_, i) => !usadosA.has(i));
+  const semParB = listaB.filter((_, i) => !usadosB.has(i));
   return { pares, semParA, semParB };
 }
