@@ -402,7 +402,11 @@ export default function Conciliacao({ contasAPagar, movimentacoes, categorias, o
     const pagamentosApp = contasAPagar
       .filter((c) => c.status === 'Pago')
       .map((c) => {
-        const [dia, mes, ano] = c.vencimento.split('/');
+        // Compara pela data em que ela foi PAGA de verdade, não pelo
+        // vencimento original — uma conta paga fora do prazo (antes ou
+        // depois) não batia com a linha do extrato porque a data usada era
+        // a errada, mesmo o valor e o pagamento sendo exatamente os mesmos.
+        const [dia, mes, ano] = (c.dataPagamento || c.vencimento).split('/');
         return {
           id: `pago-${c.id}`,
           data: `${ano}-${mes}-${dia}`,
