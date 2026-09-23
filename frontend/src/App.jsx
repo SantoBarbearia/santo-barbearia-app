@@ -2143,9 +2143,9 @@ export default function App() {
       const { data, error } = await supabase.functions.invoke('sync-consumo-notion');
       if (error) throw error;
 
-      const { consumoPorBarbeiro = {}, totalLancamentosSincronizados = 0, naoMapeados = [] } = data || {};
+      const { consumoPorBarbeiro = {}, totalLancamentosSincronizados = 0, naoMapeados = [], aindaCalculando = [] } = data || {};
 
-      if (totalLancamentosSincronizados === 0 && naoMapeados.length === 0) {
+      if (totalLancamentosSincronizados === 0 && naoMapeados.length === 0 && aindaCalculando.length === 0) {
         alert('Nenhum consumo novo encontrado no Notion — já está tudo em dia.');
         return;
       }
@@ -2167,7 +2167,10 @@ export default function App() {
       const avisoNaoMapeados = naoMapeados.length > 0
         ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente (barbeiro não reconhecido, ex: Maria Paula ou vaga nova) — confira direto no Notion.`
         : '';
-      alert(`Consumo atualizado a partir do Notion:\n\n${resumo || '(nenhum barbeiro cadastrado teve consumo novo)'}${avisoNaoMapeados}`);
+      const avisoAindaCalculando = aindaCalculando.length > 0
+        ? `\n\n⏳ ${aindaCalculando.length} lançamento(s) acabaram de ser criados e o Notion ainda não terminou de calcular o valor — ficaram pendentes e entram automaticamente na próxima vez que você clicar em "Atualizar" (espere um minutinho).`
+        : '';
+      alert(`Consumo atualizado a partir do Notion:\n\n${resumo || '(nenhum barbeiro cadastrado teve consumo novo)'}${avisoNaoMapeados}${avisoAindaCalculando}`);
     } catch (erro) {
       alert(`Não deu pra atualizar o consumo do Notion: ${erro.message || erro}`);
     } finally {
