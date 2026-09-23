@@ -45,8 +45,8 @@ async function notionFetch(path: string, init: RequestInit, notionToken: string)
   return resposta.json();
 }
 
-async function buscarLancamentosNaoSincronizados(notionToken: string) {
-  const paginas: any[] = [];
+async function listarIdsNaoSincronizados(notionToken: string) {
+  const ids: string[] = [];
   let cursor: string | undefined;
   do {
     const pagina: any = await notionFetch(
@@ -60,9 +60,23 @@ async function buscarLancamentosNaoSincronizados(notionToken: string) {
       },
       notionToken,
     );
-    paginas.push(...pagina.results);
+    ids.push(...pagina.results.map((pagina: any) => pagina.id));
     cursor = pagina.has_more ? pagina.next_cursor : undefined;
   } while (cursor);
+  return ids;
+}
+
+// O endpoint de listagem (/databases/{id}/query) usa um índice de busca que
+// pode ficar desatualizado nos relacionamentos (Barbeiro, Produto) por bem
+// mais tempo do que o esperado -- às vezes minutos depois do lançamento ser
+// criado. Buscar cada página individualmente (GET /pages/{id}) é a forma
+// confiável de pegar os relacionamentos e o rollup já calculados de verdade.
+async function buscarLancamentosNaoSincronizados(notionToken: string) {
+  const ids = await listarIdsNaoSincronizados(notionToken);
+  const paginas: any[] = [];
+  for (const id of ids) {
+    paginas.push(await notionFetch(`/pages/${id}`, { method: "GET" }, notionToken));
+  }
   return paginas;
 }
 
