@@ -107,13 +107,23 @@ Deno.serve(async (req) => {
       const quantidade = typeof quantidadeNumero === "number" && quantidadeNumero > 0 ? quantidadeNumero : 1;
       const valor = Math.round(valorUnitario * quantidade * 100) / 100;
 
-      // O Notion pode levar alguns segundos pra terminar de calcular o rollup
-      // "Valor" depois que o Produto é preenchido -- se isso acontece bem no
-      // instante em que a gente sincroniza, a API retorna 0 mesmo com produto
-      // vinculado. Em vez de gravar esse zero e marcar como sincronizado
-      // (perdendo o valor real pra sempre), deixamos esse lançamento pra
-      // tentar de novo na próxima sincronização.
-      if (produtoRelacao && valorUnitario === 0) {
+      if (!produtoRelacao) {
+        // Lançamento sem produto vinculado (linha em branco/incompleta) --
+        // não tem o que somar, fica de fora reportado pra ela conferir.
+        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor: 0 });
+        continue;
+      }
+
+      // O Notion pode levar alguns minutos pra terminar de indexar um
+      // lançamento recém-criado -- tanto o relacionamento "Produto" quanto o
+      // rollup "Valor" podem aparecer incompletos pra quem consulta logo em
+      // seguida (não só o rollup). Em vez de gravar um valor errado (0) e
+      // marcar como sincronizado -- perdendo o valor real pra sempre -- um
+      // lançamento criado há menos de 5 minutos com valor ainda zerado fica
+      // pendente pra tentar de novo na próxima sincronização.
+      const criadoEmMs = lancamento.created_time ? new Date(lancamento.created_time).getTime() : 0;
+      const recemCriado = Date.now() - criadoEmMs < 5 * 60 * 1000;
+      if (valor === 0 && recemCriado) {
         aindaCalculando.push({ pagina: lancamento.url ?? lancamento.id });
         continue;
       }
