@@ -1,26 +1,34 @@
-// Puxa os lançamentos de consumo dos barbeiros feitos no Notion (base "🛒
-// Consumo dos Barbeiros") que ainda não foram sincronizados, soma o valor
-// (preço de custo) por barbeiro, e marca cada lançamento puxado como
-// "Sincronizado" no Notion — assim, rodar de novo nunca conta o mesmo
-// lançamento duas vezes, mesmo que ela clique em "Atualizar" várias vezes
-// antes de fechar o ciclo de comissões.
+// Puxa os lançamentos de consumo (barbeiros de comissão + funcionários de
+// salário fixo) feitos no Notion (base "🛒 Consumo dos Barbeiros") que ainda
+// não foram sincronizados, soma o valor (preço de custo x quantidade) por
+// pessoa, e marca cada lançamento puxado como "Sincronizado" no Notion —
+// assim, rodar de novo nunca conta o mesmo lançamento duas vezes, mesmo que
+// ela clique em "Atualizar" várias vezes antes de fechar o ciclo.
 //
-// O front-end soma o resultado (por barbeiro) ao campo "consumo" que já
-// existe nas comissões, em vez de substituir — assim não perde nenhum valor
-// lançado manualmente antes dessa integração existir.
+// O front-end soma o resultado ao campo "consumo" que já existe nas
+// comissões (barbeiros) ou na Folha de Pagamento (funcionários fixos), em
+// vez de substituir — assim não perde nenhum valor lançado manualmente antes
+// dessa integração existir.
 
 const NOTION_VERSION = "2022-06-28";
 const CONSUMO_DATABASE_ID = "a918102d1a0b4c7bbdb4b1b48e4042bb";
 
 // Página do barbeiro no Notion (relation "Barbeiro") -> chave usada no app.
-// Barbeiros fora dessa lista (Maria Paula, vagas "Novo Barbeiro N" etc.) não
-// entram no desconto de comissão automático — ficam de fora do resultado,
-// listados em "naoMapeados" pra ela decidir o que fazer manualmente.
+// Barbeiros fora dessa lista entram em FUNCIONARIO_FIXO_POR_PAGINA_NOTION
+// (Folha de Pagamento) ou, se não estiverem em nenhuma das duas, ficam de
+// fora do resultado, listados em "naoMapeados" pra ela decidir manualmente
+// (ex: vagas "Novo Barbeiro N" ainda não preenchidas).
 const BARBEIRO_POR_PAGINA_NOTION: Record<string, string> = {
   "399fdccf-f522-80c8-a654-ea4c496563a5": "eduardo",
   "399fdccf-f522-8071-b2e9-d18860eaf1a5": "gabriel",
   "399fdccf-f522-80e2-91db-e6d684d03437": "thais",
   "399fdccf-f522-80b6-a7ad-ccce1826965e": "thiago",
+};
+
+// Funcionários de salário fixo (não entram na comissão dos barbeiros --
+// o consumo deles abate do salário, na aba "Folha de Pagamento").
+const FUNCIONARIO_FIXO_POR_PAGINA_NOTION: Record<string, string> = {
+  "3e4fdccf-f522-81b6-948e-f1395e6f2976": "mariapaula",
 };
 
 const corsHeaders = {
@@ -105,6 +113,7 @@ Deno.serve(async (req) => {
     const lancamentos = await buscarLancamentosNaoSincronizados(notionToken);
 
     const consumoPorBarbeiro: Record<string, number> = {};
+    const consumoPorFuncionarioFixo: Record<string, number> = {};
     const naoMapeados: { pagina: string; valor: number }[] = [];
     const aindaCalculando: { pagina: string }[] = [];
     const idsSincronizados: string[] = [];
@@ -149,14 +158,20 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const chave = BARBEIRO_POR_PAGINA_NOTION[barbeiroRelacao.id];
+      const chaveBarbeiro = BARBEIRO_POR_PAGINA_NOTION[barbeiroRelacao.id];
+      const chaveFuncionarioFixo = FUNCIONARIO_FIXO_POR_PAGINA_NOTION[barbeiroRelacao.id];
 
-      if (!chave) {
+      if (chaveBarbeiro) {
+        consumoPorBarbeiro[chaveBarbeiro] = Math.round(((consumoPorBarbeiro[chaveBarbeiro] ?? 0) + valor) * 100) / 100;
+      } else if (chaveFuncionarioFixo) {
+        // Funcionário de salário fixo (ex: Maria Paula) -- o consumo dele
+        // abate do salário na Folha de Pagamento, não da comissão.
+        consumoPorFuncionarioFixo[chaveFuncionarioFixo] = Math.round(((consumoPorFuncionarioFixo[chaveFuncionarioFixo] ?? 0) + valor) * 100) / 100;
+      } else {
         naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor });
         continue;
       }
 
-      consumoPorBarbeiro[chave] = Math.round(((consumoPorBarbeiro[chave] ?? 0) + valor) * 100) / 100;
       idsSincronizados.push(lancamento.id);
     }
 
@@ -170,6 +185,7 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         consumoPorBarbeiro,
+        consumoPorFuncionarioFixo,
         totalLancamentosSincronizados: idsSincronizados.length,
         naoMapeados,
         aindaCalculando,
