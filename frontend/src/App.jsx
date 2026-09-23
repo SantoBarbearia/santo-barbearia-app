@@ -154,6 +154,14 @@ export default function App() {
   const [gerandoBackup, setGerandoBackup] = useState(false);
   const [sincronizandoNotion, setSincronizandoNotion] = useState(false);
 
+  // Folha de Pagamento -- funcionários de salário fixo (ex: Maria Paula,
+  // estagiária), separados dos barbeiros porque não têm comissão: o cálculo
+  // é salário base menos consumo do período.
+  const [funcionariosFixos, setFuncionariosFixos] = useState({
+    mariapaula: { nome: 'Maria Paula', salarioBase: 671, consumo: 0 }
+  });
+  const [pagamentosFuncionariosFixos, setPagamentosFuncionariosFixos] = useState([]);
+
   // Carregar dados do Supabase
   useEffect(() => {
     carregarDados();
@@ -182,7 +190,9 @@ export default function App() {
         supabase.from('parametros_projecao').select('*').single(),
         supabase.from('pagamentos_nao_identificados').select('*'),
         supabase.from('resgates_cashbarber_pendentes').select('*'),
-        supabase.from('resgates_cashbarber_lancados').select('*')
+        supabase.from('resgates_cashbarber_lancados').select('*'),
+        supabase.from('funcionarios_fixos').select('*'),
+        supabase.from('pagamentos_funcionarios_fixos').select('*')
       ]);
       const semResposta = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('tempo esgotado')), 20000)
@@ -201,7 +211,9 @@ export default function App() {
         { data: projecaoParametrosData },
         { data: pagamentosNaoIdentificadosData },
         { data: resgatesCashBarberPendentesData },
-        { data: resgatesCashBarberLancadosData }
+        { data: resgatesCashBarberLancadosData },
+        { data: funcionariosFixosData },
+        { data: pagamentosFuncionariosFixosData }
       ] = await Promise.race([buscarDados, semResposta]);
 
       // Só os 4 saldos — a linha do Supabase também traz id/created_at/updated_at,
@@ -239,6 +251,18 @@ export default function App() {
       if (pagamentosNaoIdentificadosData) setPagamentosNaoIdentificados(pagamentosNaoIdentificadosData);
       if (resgatesCashBarberPendentesData) setResgatesCashBarberPendentes(resgatesCashBarberPendentesData);
       if (resgatesCashBarberLancadosData) setResgatesCashBarberLancados(resgatesCashBarberLancadosData);
+      if (funcionariosFixosData && funcionariosFixosData.length > 0) {
+        const funcionarios = {};
+        funcionariosFixosData.forEach((linha) => {
+          funcionarios[linha.chave] = {
+            nome: linha.nome,
+            salarioBase: parseFloat(linha.salario_base) || 0,
+            consumo: parseFloat(linha.consumo) || 0
+          };
+        });
+        setFuncionariosFixos(funcionarios);
+      }
+      if (pagamentosFuncionariosFixosData) setPagamentosFuncionariosFixos(pagamentosFuncionariosFixosData);
 
     } catch (erro) {
       console.error('Erro ao carregar dados:', erro);
@@ -265,6 +289,7 @@ export default function App() {
   const salvarDados = async (dadosParciais = {}) => {
     const dados = {
       contas, contasAPagar, comissoes, movimentacoes, fechamentos, notas, categorias,
+      funcionariosFixos, pagamentosFuncionariosFixos,
       ...dadosParciais
     };
     const erros = [];
@@ -307,6 +332,12 @@ export default function App() {
         await salvarTabelaSubstituindo('notas_dashboard', dados.notas, 'observações');
         await salvarTabelaSubstituindo('categorias_contabeis', dados.categorias, 'classificações contábeis');
 
+        const funcionariosFixosParaSalvar = Object.entries(dados.funcionariosFixos).map(([chave, f]) => ({
+          chave, nome: f.nome, salario_base: f.salarioBase, consumo: f.consumo
+        }));
+        verificar(await supabase.from('funcionarios_fixos').upsert(funcionariosFixosParaSalvar), 'folha de pagamento');
+        await salvarTabelaSubstituindo('pagamentos_funcionarios_fixos', dados.pagamentosFuncionariosFixos, 'pagamentos de folha de pagamento');
+
         // O saldo das contas só é salvo por último, e só se tudo mais acima deu
         // certo — se alguma tabela (principalmente movimentações) falhar no meio
         // do caminho, o saldo fica exatamente como estava antes, em vez de
@@ -345,7 +376,8 @@ export default function App() {
     'contas', 'contas_pagar', 'comissoes', 'movimentacoes', 'fechamentos',
     'notas_dashboard', 'categorias_contabeis', 'dados_empresa', 'faturamento_manual',
     'parametros_projecao', 'pagamentos_nao_identificados',
-    'resgates_cashbarber_pendentes', 'resgates_cashbarber_lancados'
+    'resgates_cashbarber_pendentes', 'resgates_cashbarber_lancados',
+    'funcionarios_fixos', 'pagamentos_funcionarios_fixos'
   ];
 
   const handleBaixarBackupCompleto = async () => {
@@ -1606,6 +1638,129 @@ export default function App() {
     salvarDados({ comissoes: comissoesZeradas, fechamentos: novosFechamentos });
   };
 
+  // Gera o recibo em PDF de um pagamento da Folha de Pagamento, detalhando
+  // salário, consumo e total -- o mesmo padrão visual (logo + dados da
+  // empresa) do Relatório Financeiro, só que num documento bem mais simples.
+  const gerarReciboFuncionarioFixoPDF = async (pagamento) => {
+    const cabecalhoEmpresa = linhasCabecalhoEmpresa();
+    const dimensoesLogo = dadosEmpresa.logo ? await obterDimensoesImagem(dadosEmpresa.logo).catch(() => null) : null;
+    const formatarMoedaPDF = (v) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const MARGEM = 14;
+    const LARGURA_PAGINA = doc.internal.pageSize.getWidth();
+
+    let xTexto = MARGEM;
+    let yLinhaEmpresa = MARGEM + 4;
+    if (dadosEmpresa.logo && dimensoesLogo) {
+      const ALTURA_MAX_MM = 20;
+      const LARGURA_MAX_MM = 45;
+      const escala = Math.min(LARGURA_MAX_MM / dimensoesLogo.largura, ALTURA_MAX_MM / dimensoesLogo.altura, 1);
+      const larguraLogo = dimensoesLogo.largura * escala;
+      const alturaLogo = dimensoesLogo.altura * escala;
+      const extensaoMatch = dadosEmpresa.logo.match(/^data:image\/(\w+);/);
+      let formato = (extensaoMatch?.[1] || 'png').toUpperCase();
+      if (formato === 'JPG') formato = 'JPEG';
+      try {
+        doc.addImage(dadosEmpresa.logo, formato, MARGEM, MARGEM, larguraLogo, alturaLogo);
+        xTexto = MARGEM + larguraLogo + 6;
+      } catch (e) {
+        console.error('Não foi possível desenhar a logo no PDF:', e);
+      }
+    }
+    if (cabecalhoEmpresa.length > 0) {
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(12);
+      doc.text(cabecalhoEmpresa[0], xTexto, yLinhaEmpresa);
+      yLinhaEmpresa += 5;
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(90);
+      cabecalhoEmpresa.slice(1).forEach((texto) => {
+        doc.text(texto, xTexto, yLinhaEmpresa);
+        yLinhaEmpresa += 4;
+      });
+      doc.setTextColor(0);
+    }
+
+    let y = Math.max(yLinhaEmpresa + 4, MARGEM + (dadosEmpresa.logo ? 24 : 0) + 6);
+    doc.setDrawColor(9, 74, 0);
+    doc.setLineWidth(0.6);
+    doc.line(MARGEM, y, LARGURA_PAGINA - MARGEM, y);
+    y += 8;
+
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(15);
+    doc.text('Recibo de Pagamento', MARGEM, y);
+    y += 7;
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(10);
+    doc.text(`Funcionário(a): ${pagamento.nome}`, MARGEM, y);
+    y += 5;
+    doc.text(`Período: ${pagamento.periodoLabel}`, MARGEM, y);
+    doc.text(`Data do Pagamento: ${pagamento.dataPagamento}`, LARGURA_PAGINA / 2, y);
+    y += 8;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGEM, right: MARGEM },
+      styles: { fontSize: 10 },
+      theme: 'plain',
+      body: [
+        ['Salário Base', formatarMoedaPDF(pagamento.salarioBase)],
+        ['(-) Consumo do Período', formatarMoedaPDF(pagamento.consumo)],
+        [{ content: 'Total a Pagar', styles: { fontStyle: 'bold' } }, { content: formatarMoedaPDF(pagamento.totalPago), styles: { fontStyle: 'bold' } }]
+      ]
+    });
+    y = doc.lastAutoTable.finalY + 30;
+
+    doc.setFontSize(9);
+    doc.text('_______________________________________', MARGEM, y);
+    y += 5;
+    doc.text(`Assinatura de ${pagamento.nome}`, MARGEM, y);
+
+    doc.save(`recibo-${pagamento.funcionarioChave}-${pagamento.dataPagamento.replace(/\//g, '-')}.pdf`);
+  };
+
+  // Fecha o pagamento do mês de um funcionário de salário fixo: calcula o
+  // total (salário - consumo), gera o recibo em PDF, salva uma cópia no
+  // histórico e zera o consumo (o salário base continua igual pro próximo
+  // mês).
+  const handleFecharPagamentoFuncionarioFixo = async (chave) => {
+    const funcionario = funcionariosFixos[chave];
+    if (!funcionario) return;
+
+    const totalPago = Math.round((funcionario.salarioBase - funcionario.consumo) * 100) / 100;
+    const hoje = new Date();
+    const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const periodoLabel = `${nomesMeses[hoje.getMonth()]}/${hoje.getFullYear()}`;
+
+    if (!window.confirm(`Fechar pagamento de ${funcionario.nome} (${periodoLabel})?\n\nSalário Base: R$ ${funcionario.salarioBase.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\nConsumo: R$ ${funcionario.consumo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\nTotal a Pagar: R$ ${totalPago.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\nIsso gera o recibo em PDF e zera o consumo pro próximo mês.`)) return;
+
+    const novoPagamento = {
+      id: Date.now(),
+      funcionarioChave: chave,
+      nome: funcionario.nome,
+      salarioBase: funcionario.salarioBase,
+      consumo: funcionario.consumo,
+      totalPago,
+      dataPagamento: hoje.toLocaleDateString('pt-BR'),
+      periodoLabel
+    };
+    const novosPagamentos = [...pagamentosFuncionariosFixos, novoPagamento];
+
+    const novosFuncionariosFixos = {
+      ...funcionariosFixos,
+      [chave]: { ...funcionario, consumo: 0 }
+    };
+
+    setPagamentosFuncionariosFixos(novosPagamentos);
+    setFuncionariosFixos(novosFuncionariosFixos);
+    await salvarDados({ funcionariosFixos: novosFuncionariosFixos, pagamentosFuncionariosFixos: novosPagamentos });
+
+    await gerarReciboFuncionarioFixoPDF(novoPagamento);
+  };
+
   const handleAdicionarNota = (texto) => {
     if (!texto.trim()) return;
     const novaNota = { id: Date.now(), data: new Date().toLocaleDateString('pt-BR'), texto: capitalizarTexto(texto.trim()) };
@@ -2143,7 +2298,10 @@ export default function App() {
       const { data, error } = await supabase.functions.invoke('sync-consumo-notion');
       if (error) throw error;
 
-      const { consumoPorBarbeiro = {}, totalLancamentosSincronizados = 0, naoMapeados = [], aindaCalculando = [] } = data || {};
+      const {
+        consumoPorBarbeiro = {}, consumoPorFuncionarioFixo = {},
+        totalLancamentosSincronizados = 0, naoMapeados = [], aindaCalculando = []
+      } = data || {};
 
       if (totalLancamentosSincronizados === 0 && naoMapeados.length === 0 && aindaCalculando.length === 0) {
         alert('Nenhum consumo novo encontrado no Notion — já está tudo em dia.');
@@ -2159,18 +2317,35 @@ export default function App() {
         };
       });
       setComissoes(novasComissoes);
-      await salvarDados({ contas, contasAPagar, comissoes: novasComissoes, movimentacoes });
 
-      const resumo = Object.entries(consumoPorBarbeiro)
-        .map(([chave, valor]) => `${barbeiros.find(b => b.chave === chave)?.nome || chave}: +R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-        .join('\n');
+      const novosFuncionariosFixos = { ...funcionariosFixos };
+      Object.entries(consumoPorFuncionarioFixo).forEach(([chave, valorAdicional]) => {
+        if (!novosFuncionariosFixos[chave]) return;
+        novosFuncionariosFixos[chave] = {
+          ...novosFuncionariosFixos[chave],
+          consumo: Math.round((novosFuncionariosFixos[chave].consumo + valorAdicional) * 100) / 100
+        };
+      });
+      setFuncionariosFixos(novosFuncionariosFixos);
+
+      await salvarDados({
+        contas, contasAPagar, comissoes: novasComissoes, movimentacoes,
+        funcionariosFixos: novosFuncionariosFixos
+      });
+
+      const resumo = [
+        ...Object.entries(consumoPorBarbeiro).map(([chave, valor]) =>
+          `${barbeiros.find(b => b.chave === chave)?.nome || chave}: +R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
+        ...Object.entries(consumoPorFuncionarioFixo).map(([chave, valor]) =>
+          `${novosFuncionariosFixos[chave]?.nome || chave} (Folha de Pagamento): +R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+      ].join('\n');
       const avisoNaoMapeados = naoMapeados.length > 0
-        ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente (barbeiro não reconhecido, ex: Maria Paula ou vaga nova) — confira direto no Notion.`
+        ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente (barbeiro/funcionário não reconhecido, ex: vaga nova) — confira direto no Notion.`
         : '';
       const avisoAindaCalculando = aindaCalculando.length > 0
         ? `\n\n⏳ ${aindaCalculando.length} lançamento(s) acabaram de ser criados e o Notion ainda não terminou de calcular o valor — ficaram pendentes e entram automaticamente na próxima vez que você clicar em "Atualizar" (espere um minutinho).`
         : '';
-      alert(`Consumo atualizado a partir do Notion:\n\n${resumo || '(nenhum barbeiro cadastrado teve consumo novo)'}${avisoNaoMapeados}${avisoAindaCalculando}`);
+      alert(`Consumo atualizado a partir do Notion:\n\n${resumo || '(ninguém teve consumo novo)'}${avisoNaoMapeados}${avisoAindaCalculando}`);
     } catch (erro) {
       alert(`Não deu pra atualizar o consumo do Notion: ${erro.message || erro}`);
     } finally {
@@ -2224,6 +2399,7 @@ export default function App() {
             { id: 'visao-geral', label: 'Visão Geral' },
             { id: 'contas-pagar', label: 'Contas a Pagar' },
             { id: 'comissoes', label: 'Comissões' },
+            { id: 'folha-pagamento', label: 'Folha de Pagamento' },
             { id: 'transferencias', label: 'Transferências' },
             { id: 'conciliacao', label: 'Conciliação' },
             { id: 'parametros', label: 'Parâmetros' }
@@ -2925,6 +3101,98 @@ export default function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {activeTab === 'folha-pagamento' && (
+            <div className="card">
+              <h3>Folha de Pagamento</h3>
+              <p style={{ color: '#666', marginTop: -8, marginBottom: 15 }}>
+                Funcionários de salário fixo (sem comissão) — o consumo deles no Notion abate direto do salário.
+              </p>
+              <button
+                onClick={handleAtualizarConsumoNotion}
+                disabled={sincronizandoNotion}
+                className="btn-transferir"
+                style={{ marginBottom: 15 }}
+              >
+                {sincronizandoNotion ? 'Atualizando...' : '🔄 Atualizar Consumo do Notion'}
+              </button>
+              {Object.entries(funcionariosFixos).map(([chave, funcionario]) => (
+                <div key={chave} className="comissao-card">
+                  <h4>{funcionario.nome}</h4>
+                  <div className="grid-comissao">
+                    <div className="input-group">
+                      <label>Salário Base</label>
+                      <input
+                        type="number"
+                        value={funcionario.salarioBase}
+                        onChange={(e) => {
+                          const novosFuncionariosFixos = {
+                            ...funcionariosFixos,
+                            [chave]: { ...funcionario, salarioBase: parseFloat(e.target.value) || 0 }
+                          };
+                          setFuncionariosFixos(novosFuncionariosFixos);
+                          salvarDados({ funcionariosFixos: novosFuncionariosFixos });
+                        }}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label>Consumo do Período (Notion)</label>
+                      <input type="number" value={funcionario.consumo} readOnly />
+                    </div>
+                  </div>
+                  <div className="total-comissao">
+                    <span>Total a Pagar:</span>
+                    <span className="valor">
+                      R$ {(funcionario.salarioBase - funcionario.consumo).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleFecharPagamentoFuncionarioFixo(chave)}
+                    className="btn-transferir"
+                    style={{ marginTop: 10 }}
+                  >
+                    Fechar Pagamento e Gerar Recibo
+                  </button>
+                </div>
+              ))}
+
+              {pagamentosFuncionariosFixos.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: 25 }}>Histórico de Pagamentos</h3>
+                  <table className="tabela">
+                    <thead>
+                      <tr>
+                        <th>Funcionário</th>
+                        <th>Período</th>
+                        <th>Salário Base</th>
+                        <th>Consumo</th>
+                        <th>Total Pago</th>
+                        <th>Data</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...pagamentosFuncionariosFixos].reverse().map((pagamento) => (
+                        <tr key={pagamento.id}>
+                          <td>{pagamento.nome}</td>
+                          <td>{pagamento.periodoLabel}</td>
+                          <td>R$ {pagamento.salarioBase.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          <td>R$ {pagamento.consumo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          <td>R$ {pagamento.totalPago.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          <td>{pagamento.dataPagamento}</td>
+                          <td>
+                            <button onClick={() => gerarReciboFuncionarioFixoPDF(pagamento)} className="btn-editar">
+                              Baixar Recibo
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
             </div>
           )}
 

@@ -200,6 +200,28 @@ CREATE TABLE IF NOT EXISTS resgates_cashbarber_lancados (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Folha de Pagamento: funcionários com salário fixo (ex: Maria Paula,
+-- estagiária) — sem comissão, só salário base menos consumo do período.
+-- "funcionarios_fixos" guarda o estado atual (1 linha por funcionário),
+-- "pagamentos_funcionarios_fixos" é o histórico dos recibos já fechados.
+CREATE TABLE IF NOT EXISTS funcionarios_fixos (
+  chave VARCHAR(50) PRIMARY KEY,
+  nome VARCHAR(100) NOT NULL,
+  salario_base DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  consumo DECIMAL(10, 2) NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS pagamentos_funcionarios_fixos (
+  id BIGINT PRIMARY KEY,
+  "funcionarioChave" VARCHAR(50) NOT NULL,
+  nome VARCHAR(100) NOT NULL,
+  "salarioBase" DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  consumo DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  "totalPago" DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  "dataPagamento" DATE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Habilitar RLS (Row Level Security). A chave "Publishable key" do Supabase
 -- exige RLS habilitado pra liberar escrita pelo navegador (mesmo que a
 -- leitura funcione sem isso) — sem essa política, inserir/editar/excluir
@@ -218,6 +240,8 @@ ALTER TABLE parametros_projecao ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pagamentos_nao_identificados ENABLE ROW LEVEL SECURITY;
 ALTER TABLE resgates_cashbarber_pendentes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE resgates_cashbarber_lancados ENABLE ROW LEVEL SECURITY;
+ALTER TABLE funcionarios_fixos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pagamentos_funcionarios_fixos ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Acesso total" ON contas FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON contas_pagar FOR ALL USING (true) WITH CHECK (true);
@@ -232,11 +256,17 @@ CREATE POLICY "Acesso total" ON parametros_projecao FOR ALL USING (true) WITH CH
 CREATE POLICY "Acesso total" ON pagamentos_nao_identificados FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON resgates_cashbarber_pendentes FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Acesso total" ON resgates_cashbarber_lancados FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON funcionarios_fixos FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Acesso total" ON pagamentos_funcionarios_fixos FOR ALL USING (true) WITH CHECK (true);
 
 -- Inserir registros iniciais
-INSERT INTO contas (id, caixa, cofre, reserva, sicredi) 
+INSERT INTO contas (id, caixa, cofre, reserva, sicredi)
 VALUES (1, 0, 0, 0, 0)
 ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO funcionarios_fixos (chave, nome, salario_base, consumo)
+VALUES ('mariapaula', 'Maria Paula', 671.00, 0)
+ON CONFLICT (chave) DO NOTHING;
 
 INSERT INTO comissoes (id)
 VALUES (1)
