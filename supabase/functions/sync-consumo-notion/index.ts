@@ -92,12 +92,25 @@ Deno.serve(async (req) => {
 
     const consumoPorBarbeiro: Record<string, number> = {};
     const naoMapeados: { pagina: string; valor: number }[] = [];
+    const aindaCalculando: { pagina: string }[] = [];
     const idsSincronizados: string[] = [];
 
     for (const lancamento of lancamentos) {
       const barbeiroRelacao = lancamento.properties?.Barbeiro?.relation?.[0];
+      const produtoRelacao = lancamento.properties?.Produto?.relation?.[0];
       const valorRollup = lancamento.properties?.Valor?.rollup;
       const valor = valorRollup?.type === "number" ? (valorRollup.number ?? 0) : 0;
+
+      // O Notion pode levar alguns segundos pra terminar de calcular o rollup
+      // "Valor" depois que o Produto é preenchido -- se isso acontece bem no
+      // instante em que a gente sincroniza, a API retorna 0 mesmo com produto
+      // vinculado. Em vez de gravar esse zero e marcar como sincronizado
+      // (perdendo o valor real pra sempre), deixamos esse lançamento pra
+      // tentar de novo na próxima sincronização.
+      if (produtoRelacao && valor === 0) {
+        aindaCalculando.push({ pagina: lancamento.url ?? lancamento.id });
+        continue;
+      }
 
       if (!barbeiroRelacao) {
         // Lançamento sem barbeiro vinculado -- não dá pra saber de quem
@@ -129,6 +142,7 @@ Deno.serve(async (req) => {
         consumoPorBarbeiro,
         totalLancamentosSincronizados: idsSincronizados.length,
         naoMapeados,
+        aindaCalculando,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
