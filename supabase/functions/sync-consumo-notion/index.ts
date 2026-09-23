@@ -99,7 +99,13 @@ Deno.serve(async (req) => {
       const barbeiroRelacao = lancamento.properties?.Barbeiro?.relation?.[0];
       const produtoRelacao = lancamento.properties?.Produto?.relation?.[0];
       const valorRollup = lancamento.properties?.Valor?.rollup;
-      const valor = valorRollup?.type === "number" ? (valorRollup.number ?? 0) : 0;
+      const valorUnitario = valorRollup?.type === "number" ? (valorRollup.number ?? 0) : 0;
+
+      // "Quantidade" é opcional -- se o barbeiro não preencher (ou deixar em
+      // branco), assume 1 unidade.
+      const quantidadeNumero = lancamento.properties?.Quantidade?.number;
+      const quantidade = typeof quantidadeNumero === "number" && quantidadeNumero > 0 ? quantidadeNumero : 1;
+      const valor = Math.round(valorUnitario * quantidade * 100) / 100;
 
       // O Notion pode levar alguns segundos pra terminar de calcular o rollup
       // "Valor" depois que o Produto é preenchido -- se isso acontece bem no
@@ -107,7 +113,7 @@ Deno.serve(async (req) => {
       // vinculado. Em vez de gravar esse zero e marcar como sincronizado
       // (perdendo o valor real pra sempre), deixamos esse lançamento pra
       // tentar de novo na próxima sincronização.
-      if (produtoRelacao && valor === 0) {
+      if (produtoRelacao && valorUnitario === 0) {
         aindaCalculando.push({ pagina: lancamento.url ?? lancamento.id });
         continue;
       }
