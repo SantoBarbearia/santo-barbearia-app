@@ -152,6 +152,7 @@ export default function App() {
   const [vgTipoMovimento, setVgTipoMovimento] = useState('todas');
   const [mostrarDetalheAbertas, setMostrarDetalheAbertas] = useState(false);
   const [gerandoBackup, setGerandoBackup] = useState(false);
+  const [sincronizandoNotion, setSincronizandoNotion] = useState(false);
 
   // Carregar dados do Supabase
   useEffect(() => {
@@ -2130,6 +2131,50 @@ export default function App() {
     return (c.servicos + c.produtos + c.assinatura) - (c.vale + c.consumo + c.mei);
   };
 
+  // Puxa os lançamentos de consumo feitos no Notion (base "Consumo dos
+  // Barbeiros") que ainda não foram sincronizados e SOMA ao campo "consumo"
+  // já existente de cada barbeiro — nunca substitui, pra não apagar valores
+  // lançados manualmente antes ou por fora dessa integração. Pode clicar
+  // quantas vezes quiser: a Edge Function só traz o que ainda não foi
+  // marcado como sincronizado no Notion, então nunca conta duas vezes.
+  const handleAtualizarConsumoNotion = async () => {
+    setSincronizandoNotion(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-consumo-notion');
+      if (error) throw error;
+
+      const { consumoPorBarbeiro = {}, totalLancamentosSincronizados = 0, naoMapeados = [] } = data || {};
+
+      if (totalLancamentosSincronizados === 0 && naoMapeados.length === 0) {
+        alert('Nenhum consumo novo encontrado no Notion — já está tudo em dia.');
+        return;
+      }
+
+      const novasComissoes = { ...comissoes };
+      Object.entries(consumoPorBarbeiro).forEach(([chave, valorAdicional]) => {
+        if (!novasComissoes[chave]) return;
+        novasComissoes[chave] = {
+          ...novasComissoes[chave],
+          consumo: Math.round((novasComissoes[chave].consumo + valorAdicional) * 100) / 100
+        };
+      });
+      setComissoes(novasComissoes);
+      await salvarDados({ contas, contasAPagar, comissoes: novasComissoes, movimentacoes });
+
+      const resumo = Object.entries(consumoPorBarbeiro)
+        .map(([chave, valor]) => `${barbeiros.find(b => b.chave === chave)?.nome || chave}: +R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+        .join('\n');
+      const avisoNaoMapeados = naoMapeados.length > 0
+        ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente (barbeiro não reconhecido, ex: Maria Paula ou vaga nova) — confira direto no Notion.`
+        : '';
+      alert(`Consumo atualizado a partir do Notion:\n\n${resumo || '(nenhum barbeiro cadastrado teve consumo novo)'}${avisoNaoMapeados}`);
+    } catch (erro) {
+      alert(`Não deu pra atualizar o consumo do Notion: ${erro.message || erro}`);
+    } finally {
+      setSincronizandoNotion(false);
+    }
+  };
+
   const barbeiros = [
     { chave: 'eduardo', nome: 'Eduardo Valverde' },
     { chave: 'gabriel', nome: 'Gabriel Evangelista' },
@@ -2841,6 +2886,14 @@ export default function App() {
           {activeTab === 'comissoes' && (
             <div className="card">
               <h3>Cálculo de Comissões</h3>
+              <button
+                onClick={handleAtualizarConsumoNotion}
+                disabled={sincronizandoNotion}
+                className="btn-transferir"
+                style={{ marginBottom: 15 }}
+              >
+                {sincronizandoNotion ? 'Atualizando...' : '🔄 Atualizar Consumo do Notion'}
+              </button>
               {barbeiros.map(barb => (
                 <div key={barb.chave} className="comissao-card">
                   <h4>{barb.nome}</h4>
