@@ -131,9 +131,14 @@ Deno.serve(async (req) => {
       const valor = Math.round(valorUnitario * quantidade * 100) / 100;
 
       if (!produtoRelacao) {
-        // Lançamento sem produto vinculado (linha em branco/incompleta) --
-        // não tem o que somar, fica de fora reportado pra ela conferir.
-        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor: 0, motivo: "sem Produto vinculado" });
+        // DEBUG TEMPORÁRIO: mostra exatamente o que a API do Notion devolveu
+        // pra essa propriedade, pra investigar por que aparece vazia mesmo
+        // quando o Produto está preenchido no Notion.
+        naoMapeados.push({
+          pagina: lancamento.url ?? lancamento.id,
+          valor: 0,
+          motivo: `sem Produto vinculado -- DEBUG Produto=${JSON.stringify(lancamento.properties?.Produto)} Barbeiro=${JSON.stringify(lancamento.properties?.Barbeiro)}`,
+        });
         continue;
       }
 
