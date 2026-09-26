@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
 
     const consumoPorBarbeiro: Record<string, number> = {};
     const consumoPorFuncionarioFixo: Record<string, number> = {};
-    const naoMapeados: { pagina: string; valor: number }[] = [];
+    const naoMapeados: { pagina: string; valor: number; motivo: string }[] = [];
     const aindaCalculando: { pagina: string }[] = [];
     const idsSincronizados: string[] = [];
 
@@ -133,7 +133,7 @@ Deno.serve(async (req) => {
       if (!produtoRelacao) {
         // Lançamento sem produto vinculado (linha em branco/incompleta) --
         // não tem o que somar, fica de fora reportado pra ela conferir.
-        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor: 0 });
+        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor: 0, motivo: "sem Produto vinculado" });
         continue;
       }
 
@@ -154,7 +154,7 @@ Deno.serve(async (req) => {
       if (!barbeiroRelacao) {
         // Lançamento sem barbeiro vinculado -- não dá pra saber de quem
         // descontar, então fica de fora e é reportado pra ela conferir.
-        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor });
+        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor, motivo: "sem Barbeiro vinculado" });
         continue;
       }
 
@@ -168,7 +168,7 @@ Deno.serve(async (req) => {
         // abate do salário na Folha de Pagamento, não da comissão.
         consumoPorFuncionarioFixo[chaveFuncionarioFixo] = Math.round(((consumoPorFuncionarioFixo[chaveFuncionarioFixo] ?? 0) + valor) * 100) / 100;
       } else {
-        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor });
+        naoMapeados.push({ pagina: lancamento.url ?? lancamento.id, valor, motivo: `Barbeiro não cadastrado no app (id Notion: ${barbeiroRelacao.id})` });
         continue;
       }
 
