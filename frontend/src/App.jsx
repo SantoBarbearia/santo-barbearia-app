@@ -2340,7 +2340,8 @@ export default function App() {
           `${novosFuncionariosFixos[chave]?.nome || chave} (Folha de Pagamento): +R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
       ].join('\n');
       const avisoNaoMapeados = naoMapeados.length > 0
-        ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente (barbeiro/funcionário não reconhecido, ex: vaga nova) — confira direto no Notion.`
+        ? `\n\n⚠️ ${naoMapeados.length} lançamento(s) não puderam ser somados automaticamente:\n` +
+          naoMapeados.map((n) => `   • ${n.motivo || 'motivo desconhecido'}`).join('\n')
         : '';
       const avisoAindaCalculando = aindaCalculando.length > 0
         ? `\n\n⏳ ${aindaCalculando.length} lançamento(s) acabaram de ser criados e o Notion ainda não terminou de calcular o valor — ficaram pendentes e entram automaticamente na próxima vez que você clicar em "Atualizar" (espere um minutinho).`
